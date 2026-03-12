@@ -25,16 +25,106 @@ classification/pruning/
 
 ---
 
-## 서버 실행 명령어
+## 서버 환경 설정 (2080 Ti + Jupyter)
 
-### 환경 준비
+### 1단계 — 가상환경 생성 (conda 권장)
+
+```bash
+# conda 환경 생성 (Python 3.10)
+conda create -n efficientvit python=3.10 -y
+conda activate efficientvit
+```
+
+> venv를 선호하는 경우:
+> ```bash
+> python3.10 -m venv ~/envs/efficientvit
+> source ~/envs/efficientvit/bin/activate
+> ```
+
+---
+
+### 2단계 — PyTorch + CUDA 설치
+
+RTX 2080 Ti는 CUDA 11.8까지 안정 지원합니다.
+
+```bash
+# CUDA 버전 확인 (서버에 설치된 버전)
+nvidia-smi | grep "CUDA Version"
+
+# PyTorch 설치 (CUDA 11.8 기준 — 가장 범용적)
+pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+
+# CUDA 12.1을 지원하는 서버라면:
+# pip install torch==2.1.0 torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cu121
+```
+
+설치 확인:
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
+# 예상: 2.0.1+cu118 / True / NVIDIA GeForce RTX 2080 Ti
+```
+
+---
+
+### 3단계 — 프로젝트 의존성 설치
+
+```bash
+pip install timm==0.9.12
+pip install einops
+pip install Pillow
+pip install matplotlib
+pip install tqdm
+```
+
+한번에 설치:
+```bash
+pip install timm==0.9.12 einops Pillow matplotlib tqdm
+```
+
+---
+
+### 4단계 — Jupyter 커널 등록
+
+```bash
+pip install ipykernel jupyter
+
+# 현재 conda/venv 환경을 Jupyter 커널로 등록
+python -m ipykernel install --user --name efficientvit --display-name "EfficientViT (Python 3.10)"
+```
+
+Jupyter Lab 실행:
+```bash
+# 서버에서 포트 포워딩으로 접속할 경우
+jupyter lab --no-browser --port=8888 --ip=0.0.0.0
+# 로컬에서: ssh -L 8888:localhost:8888 user@server
+```
+
+---
+
+### 5단계 — 프로젝트 설정
 
 ```bash
 # 프로젝트 루트로 이동
 cd /path/to/EfficientVIT_Compression
 
-# 의존성 확인 (없으면 설치)
-pip install timm torch torchvision
+# Python path 설정 (스크립트 실행 시마다 필요)
+export PYTHONPATH=/path/to/EfficientVIT_Compression:$PYTHONPATH
+
+# 또는 .bashrc에 영구 등록
+echo 'export PYTHONPATH=/path/to/EfficientVIT_Compression:$PYTHONPATH' >> ~/.bashrc
+source ~/.bashrc
+```
+
+---
+
+## 서버 실행 명령어
+
+### 환경 준비 확인
+
+```bash
+conda activate efficientvit
+cd /path/to/EfficientVIT_Compression
+python -c "from classification.model.build import EfficientViT_M4; print('OK')"
 ```
 
 ### Option 1 — CPU만으로 구조 분석 (빠름, GPU 불필요)
@@ -56,6 +146,60 @@ python -m classification.pruning.phase_a_profile \
 
 > `--pretrained EfficientViT_M4` 지정 시 GitHub에서 자동 다운로드됩니다.
 > 구조 분석이 목적이라면 CPU + 랜덤 초기화로도 동일한 결과를 얻을 수 있습니다.
+
+---
+
+### Option 3 — Jupyter Notebook에서 실행
+
+Jupyter 노트북 셀에 아래 코드를 순서대로 실행합니다.
+
+**셀 1 — 경로 설정**
+```python
+import sys, os
+# 프로젝트 루트 경로를 직접 지정
+PROJECT_ROOT = '/path/to/EfficientVIT_Compression'
+sys.path.insert(0, PROJECT_ROOT)
+os.chdir(PROJECT_ROOT)
+```
+
+**셀 2 — Phase A 실행**
+```python
+# 터미널 명령어를 노트북에서 그대로 실행
+!python -m classification.pruning.phase_a_profile \
+    --device cuda \
+    --pretrained EfficientViT_M4 \
+    --output classification/pruning/reports/phase_a_report.json
+```
+
+**셀 3 — 결과 리포트 확인**
+```python
+import json
+
+report_path = 'classification/pruning/reports/phase_a_report.json'
+r = json.load(open(report_path))
+
+print(f"Model: {r['model']}")
+print(f"Total params: {r['total_params']:,}  ({r['total_param_mb']} MB)")
+print(f"Total groups: {r['n_groups_total']}")
+print(f"Phase1 groups: {r['n_groups_phase1']}")
+print(f"M_max target: {r['compression']['m_max_mb']} MB  (76% compression)")
+print()
+print(f"{'Type':<10} {'Groups':>7} {'Total Units':>12} {'Mem MB':>8} {'λ_rec':>7}")
+print('-' * 50)
+for t, s in r['type_summary'].items():
+    print(f"{t:<10} {s['n_groups']:>7} {s['total_units']:>12,} {s['mem_mb']:>8.3f} {s['lambda_rec']:>7.3f}")
+```
+
+**셀 4 — 그룹별 상세 확인 (특정 타입 필터링)**
+```python
+# G_FFN 그룹만 확인
+ffn_groups = [g for g in r['groups'] if g['type'] == 'G_FFN']
+print(f"G_FFN groups ({len(ffn_groups)} total):")
+print(f"{'ID':<45} {'Units':>6} {'Params/Unit':>11} {'Mem KB':>8}")
+print('-' * 75)
+for g in ffn_groups:
+    print(f"{g['id']:<45} {g['unit_count']:>6} {g['params_per_unit']:>11,} {g['group_mem_kb']:>8.1f}")
+```
 
 ---
 
