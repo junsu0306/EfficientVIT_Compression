@@ -435,9 +435,7 @@ class CascadedGroupAttention(torch.nn.Module):
         feat = feats_in[0]  # 첫 헤드는 첫 번째 청크로 시작
 
         for i, qkv in enumerate(self.qkvs):
-            if i > 0: # add the previous output to the input
-                # Cascaded: 이전 헤드의 Value 출력 + 현재 헤드의 입력 채널 병합
-                # 두 텐서의 채널 수가 다를 수 있으므로 주의 (feat은 self.d 채널)
+            if i > 0: 
                 feat = feat + feats_in[i]
 
             # QKV 프로젝션: (B, C//num_heads, H, W) -> (B, key_dim*2+d, H, W)
