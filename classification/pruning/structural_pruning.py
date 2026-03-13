@@ -772,10 +772,10 @@ class IterativePhysicalPruner:
     def __init__(
         self,
         target_reduction: float = 0.76,
-        ffn_prune_per_epoch: float = 0.10,   # FFN: 적극적 pruning (10:2:1 비율)
-        qk_prune_per_epoch: float = 0.02,    # QK: 조심스럽게 (이미 작음)
-        min_ffn_ratio: float = 0.10,         # 최소 FFN hidden 유지 비율 (최대 90% pruning)
-        min_qk_ratio: float = 0.50,          # 최소 QK dim 유지 비율 (attention 보존)
+        ffn_prune_per_epoch: float = 0.25,   # FFN: 매우 공격적 (epoch당 25% 제거)
+        qk_prune_per_epoch: float = 0.05,    # QK: epoch당 5% 제거
+        min_ffn_ratio: float = 0.05,         # 최소 FFN 5% 유지 (최대 95% pruning)
+        min_qk_ratio: float = 0.25,          # 최소 QK 25% 유지
         warmup_epochs: int = 0,              # pruning 시작 전 warmup
         verbose: bool = True
     ):

@@ -65,17 +65,17 @@ def get_args_parser():
     parser.add_argument('--num-workers', default=8, type=int)
     parser.add_argument('--pin-mem', action='store_true', default=True)
 
-    # Pruning (FFN:QK:V = 10:2:1 비율 적용!)
-    # FFN은 적극적으로 pruning, QK는 조심스럽게 (이미 작음), V는 거의 안 함
+    # Pruning (공격적 설정 - 15 epochs 내 76% 달성)
+    # FFN이 파라미터의 대부분을 차지하므로 매우 공격적으로 pruning
     parser.add_argument('--target-reduction', default=0.76, type=float)
-    parser.add_argument('--ffn-prune-per-epoch', default=0.10, type=float,
-                        help='FFN: 매 epoch 10% 제거 (적극적)')
-    parser.add_argument('--qk-prune-per-epoch', default=0.02, type=float,
-                        help='QK: 매 epoch 2% 제거 (조심스럽게, 이미 작음)')
-    parser.add_argument('--min-ffn-ratio', default=0.10, type=float,
-                        help='FFN 최소 10% 유지 (최대 90% pruning 가능)')
-    parser.add_argument('--min-qk-ratio', default=0.50, type=float,
-                        help='QK 최소 50% 유지 (attention 보존)')
+    parser.add_argument('--ffn-prune-per-epoch', default=0.25, type=float,
+                        help='FFN: 매 epoch 25%% 제거 (매우 공격적)')
+    parser.add_argument('--qk-prune-per-epoch', default=0.05, type=float,
+                        help='QK: 매 epoch 5%% 제거')
+    parser.add_argument('--min-ffn-ratio', default=0.05, type=float,
+                        help='FFN 최소 5%% 유지 (최대 95%% pruning)')
+    parser.add_argument('--min-qk-ratio', default=0.25, type=float,
+                        help='QK 최소 25%% 유지')
     parser.add_argument('--warmup-epochs', default=1, type=int)
     parser.add_argument('--pruning-epochs', default=15, type=int)
     parser.add_argument('--finetune-epochs', default=10, type=int)

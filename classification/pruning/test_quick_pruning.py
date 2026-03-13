@@ -345,13 +345,13 @@ def main():
     parser.add_argument('--num-batches', default=10, type=int,
                         help='Number of batches per epoch (10 batches × 8 = 80 samples)')
 
-    # Pruning (FFN:QK:V = 10:2:1)
-    parser.add_argument('--target-reduction', default=0.50, type=float,
-                        help='Target reduction (0.5 = 50%% for quick test)')
-    parser.add_argument('--ffn-prune-per-epoch', default=0.10, type=float)
-    parser.add_argument('--qk-prune-per-epoch', default=0.02, type=float)
-    parser.add_argument('--min-ffn-ratio', default=0.10, type=float)
-    parser.add_argument('--min-qk-ratio', default=0.50, type=float)
+    # Pruning (공격적 설정 - 빠른 테스트)
+    parser.add_argument('--target-reduction', default=0.76, type=float,
+                        help='Target reduction (0.76 = 76%%)')
+    parser.add_argument('--ffn-prune-per-epoch', default=0.25, type=float)
+    parser.add_argument('--qk-prune-per-epoch', default=0.05, type=float)
+    parser.add_argument('--min-ffn-ratio', default=0.05, type=float)
+    parser.add_argument('--min-qk-ratio', default=0.25, type=float)
 
     # Epochs (빠른 테스트)
     parser.add_argument('--pruning-epochs', default=5, type=int,
