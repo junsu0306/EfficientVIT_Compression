@@ -268,3 +268,162 @@ PHASE 2+ only         ████░░░░░░░░  Subsample channels /
 | Q/K optimal d_qk (M4)        | 16                     |
 | V optimal ratio to embed dim  | 1.0 (= C/h)            |
 | Year-2 KD result (15% compress)| mAP drop: −1.8% → −0.2% with KD |
+
+---
+
+## 11. 구현 진행 현황
+
+### 완료된 작업
+
+#### Phase A — 코드 완성 (서버 실행 대기 중)
+
+**생성된 파일:**
+```
+classification/pruning/
+├── __init__.py
+├── group_dict.py        ← build_pruning_groups(model) : 67개 그룹 추출
+├── memory_utils.py      ← compute_active_param_memory(), count_zero_groups()
+├── phase_a_profile.py   ← 실행 스크립트 (argparse, JSON 리포트 생성)
+├── PHASE_A.md           ← 서버 실행 명령어 + 환경 설정 문서
+└── reports/             ← phase_a_profile.py 실행 후 JSON 저장 위치
+```
+
+**group_dict.py 핵심 구조:**
+- `build_pruning_groups(model)` → list[dict] 반환
+- 각 그룹 dict: `{id, type, lambda_rec, unit_count, modules, meta}`
+- `modules` 안에 실제 `nn.Module` 참조 포함 → Phase B soft thresholding에서 직접 사용
+- M4 기준 총 67개 그룹: G_PATCH 3 + G_FFN 20 + G_QK 24 + G_V 24
+
+**M4 blocks 인덱스 (중요, 코드 수정 시 참고):**
+```
+blocks1: [EVBlock(ed=128)]
+blocks2: [SubPreDWFFN(128), PatchMerging(128→256), SubPostDWFFN(256),
+          EVBlock(256), EVBlock(256)]
+blocks3: [SubPreDWFFN(256), PatchMerging(256→384), SubPostDWFFN(384),
+          EVBlock(384), EVBlock(384), EVBlock(384)]
+
+SubPreDWFFN  = Sequential(Residual(DWConv), Residual(FFN))
+FFN 접근법   : blocks2[0][1].m  (Residual.m → FFN)
+```
+
+**memory_utils.py 핵심 함수:**
+- `compute_active_param_memory(groups)` → 활성 unit만 계산 (PGM loss의 current_memory_bytes)
+- `profile_gpu_memory(model, device)` → CLAUDE.md §7 방법으로 실제 GPU 메모리 측정
+- `count_zero_groups(groups)` → type별 zero ratio 모니터링 (λ 진단에 사용)
+
+---
+
+### 서버에서 해야 할 일 (Phase A 완료 조건)
+
+```bash
+# 1. 환경 설정 (PHASE_A.md 참고)
+conda create -n efficientvit python=3.10 -y
+conda activate efficientvit
+pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+pip install timm==0.9.12 einops Pillow matplotlib tqdm ipykernel
+
+# 2. Phase A 실행
+cd /path/to/EfficientVIT_Compression
+python -m classification.pruning.phase_a_profile \
+    --device cuda \
+    --pretrained EfficientViT_M4 \
+    --output classification/pruning/reports/phase_a_report.json
+
+# 3. 결과 확인 → M_max 값 기록
+python -c "
+import json
+r = json.load(open('classification/pruning/reports/phase_a_report.json'))
+print('M_max:', r['compression']['m_max_mb'], 'MB')
+print('Total groups:', r['n_groups_total'])
+"
+```
+
+Phase A 성공 기준: `phase_a_report.json` 생성, 총 67개 그룹, M_max 값 확인
+
+---
+
+### 다음 단계 — Phase B (아직 미구현)
+
+**Phase B에서 구현해야 할 것:**
+
+1. **`classification/pruning/pgm_loss.py`** — PGM 정규화 항 계산
+   ```python
+   def pgm_regularization_loss(groups, lambda_ffn, lambda_qk, lambda_v):
+       # G_FFN: expand.weight[k] + shrink.weight[:,k] 의 L2 norm 합산
+       # G_QK:  qkv.weight[q_slice] + qkv.weight[k_slice] 의 L2 norm 합산
+       # G_V:   qkv.weight[v_slice] 의 L2 norm 합산
+       return loss_ffn + loss_qk + loss_v
+   ```
+
+2. **`classification/pruning/soft_threshold.py`** — optimizer.step() 직후 실행
+   ```python
+   def apply_group_soft_threshold(groups, eta, lambda_ffn, lambda_qk, lambda_v):
+       # CLAUDE.md §5.2 알고리즘:
+       # norm_g = ||w_g||_2
+       # if norm_g > eta * lambda_g: w_g *= (1 - eta*lambda_g / norm_g)
+       # else: w_g = 0
+   ```
+
+3. **`classification/pruning/phase_b_train.py`** — 훈련 루프
+   - 기존 `classification/main.py` 기반
+   - Loss = CE + PGM 정규화 + 메모리 패널티 (μ · max(0, mem - M_max))
+   - 매 optimizer.step() 후 soft thresholding 호출
+   - 10 epoch마다 `count_zero_groups()` 출력으로 λ 진단
+   - Distillation 없음 (Phase B)
+
+4. **`classification/pruning/phase_b_sweep.py`** — λ sweep 실험 자동화
+   - λ_FFN ∈ {0.002, 0.005, 0.010}, λ_QK ∈ {0.005, 0.010, 0.020}
+   - 각 설정으로 100 epoch 훈련 후 zero ratio + Top-1 acc 기록
+
+**Phase B 서버 실행 예정 명령어:**
+```bash
+# λ 기본값으로 단일 실행
+python -m classification.pruning.phase_b_train \
+    --model EfficientViT_M4 \
+    --resume /path/to/pretrained_M4.pth \
+    --data-path /path/to/ImageNet \
+    --lambda-ffn 0.005 --lambda-qk 0.010 --lambda-v 0.001 \
+    --mu 1.0 --lr 1e-4 --epochs 100 \
+    --output-dir classification/pruning/checkpoints/phase_b_default
+
+# λ sweep 자동화
+python -m classification.pruning.phase_b_sweep \
+    --data-path /path/to/ImageNet \
+    --resume /path/to/pretrained_M4.pth
+```
+
+---
+
+### Phase C / D / E 예정 (Phase B 완료 후)
+
+| Phase | 구현 예정 파일 | 핵심 내용 |
+|---|---|---|
+| C | `phase_c_train.py` | Phase B + KD loss (M5 teacher), 76% 목표 |
+| D | `phase_d_compare.py` | M4 vs YOLOv8n pruning 결과 비교 리포트 |
+| E | `phase_e_ablation.py` | G_FFN only / +G_QK / +G_V ablation 실험 |
+
+Phase C 추가 구현:
+- KD loss: `α · KL(softmax(z_T/T) || log_softmax(z_S/T)) · T²`
+- M5 teacher 모델 로드 및 freeze
+- α=0.5, T=4.0 (CLAUDE.md §5.3)
+
+---
+
+### Structure Extraction (모든 Phase 공통, 훈련 후 실행)
+
+**아직 미구현. 구현 위치: `classification/pruning/reduce.py`**
+
+CLAUDE.md §6 기준으로 구현:
+- FFN: expand/shrink weight에서 zero row 제거
+- QK: Q norms 기준으로 keep 인덱스 결정 → Q와 K 동일 인덱스 적용
+- V: v_slice norms 기준, proj input slice도 함께 정리
+- DW conv: groups = in_channels = out_channels 동기화
+
+검증 assertion (CLAUDE.md §6):
+```python
+assert new_expand.out_channels == new_shrink.in_channels
+assert new_Q.out_channels == new_K.out_channels
+_ = reduced_model(torch.zeros(1, 3, 224, 224))  # forward pass 검증
+opt_rate = 100 * (size_B - size_A) / size_B
+assert opt_rate >= 76.0
+```
