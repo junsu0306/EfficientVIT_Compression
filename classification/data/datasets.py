@@ -129,10 +129,10 @@ def build_dataset(is_train, args):
     transform = build_transform(is_train, args)
 
     if args.data_set == 'CIFAR':
-        # CIFAR-100: 100개 클래스, 32x32 이미지
-        dataset = datasets.CIFAR100(
-            args.data_path, train=is_train, transform=transform)
-        nb_classes = 100
+        # CIFAR-10: 10개 클래스, 32x32 이미지
+        dataset = datasets.CIFAR10(
+            args.data_path, train=is_train, transform=transform, download=True)
+        nb_classes = 10
     elif args.data_set == 'IMNET':
         # ImageNet: 1000개 클래스, 표준 ImageNet 데이터셋
         # .tar 압축 파일이 존재하면 TimmDatasetTar로 직접 로드 (빠른 I/O),

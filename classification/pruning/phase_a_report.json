@@ -1,0 +1,1657 @@
+{
+  "phase": "A",
+  "model": "EfficientViT_M4",
+  "pretrained": "EfficientViT_M4",
+  "total_params": 8804228,
+  "total_param_mb": 35.2169,
+  "n_groups_total": 67,
+  "n_groups_phase1": 64,
+  "type_summary": {
+    "G_FFN": {
+      "n_groups": 16,
+      "total_units": 9216,
+      "total_params": 5925888,
+      "mem_mb": 23.7036,
+      "lambda_rec": 0.005
+    },
+    "G_QK": {
+      "n_groups": 24,
+      "total_units": 384,
+      "total_params": 219520,
+      "mem_mb": 0.8781,
+      "lambda_rec": 0.01
+    },
+    "G_V": {
+      "n_groups": 24,
+      "total_units": 1792,
+      "total_params": 209920,
+      "mem_mb": 0.8397,
+      "lambda_rec": 0.001
+    },
+    "G_PATCH": {
+      "n_groups": 3,
+      "total_units": 112,
+      "total_params": 23696,
+      "mem_mb": 0.0948,
+      "lambda_rec": 0.005
+    }
+  },
+  "compression": {
+    "target_opt_rate": 0.76,
+    "target_param_count": 2113014,
+    "target_param_mb": 8.4521,
+    "m_max_mb": 8.4521
+  },
+  "hyperparams_rec": {
+    "lambda_ffn": 0.005,
+    "lambda_qk": 0.01,
+    "lambda_v": 0.001,
+    "mu": 1.0,
+    "lr": 0.0001,
+    "epochs_phase_b": 100
+  },
+  "gpu_memory": {
+    "param_memory_bytes": 35.2169,
+    "peak_forward_bytes": 143.2392,
+    "activation_bytes": 108.0223
+  },
+  "groups": [
+    {
+      "id": "patch_embed_0",
+      "type": "G_PATCH",
+      "lambda_rec": 0.005,
+      "unit_count": 16,
+      "params_per_unit": 315,
+      "group_params": 464,
+      "group_mem_kb": 1.81,
+      "meta": {
+        "layer_idx": 0,
+        "out_channels": 16,
+        "in_ch_next": 16,
+        "note": "Phase 2+ only"
+      }
+    },
+    {
+      "id": "patch_embed_1",
+      "type": "G_PATCH",
+      "lambda_rec": 0.005,
+      "unit_count": 32,
+      "params_per_unit": 720,
+      "group_params": 4672,
+      "group_mem_kb": 18.25,
+      "meta": {
+        "layer_idx": 1,
+        "out_channels": 32,
+        "in_ch_next": 32,
+        "note": "Phase 2+ only"
+      }
+    },
+    {
+      "id": "patch_embed_2",
+      "type": "G_PATCH",
+      "lambda_rec": 0.005,
+      "unit_count": 64,
+      "params_per_unit": 1440,
+      "group_params": 18560,
+      "group_mem_kb": 72.5,
+      "meta": {
+        "layer_idx": 2,
+        "out_channels": 64,
+        "in_ch_next": 64,
+        "note": "Phase 2+ only"
+      }
+    },
+    {
+      "id": "stage1_block0_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 256,
+      "params_per_unit": 256,
+      "group_params": 66304,
+      "group_mem_kb": 259.0,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "ffn_idx": 0,
+        "ed": 128,
+        "hidden_dim": 256
+      }
+    },
+    {
+      "id": "stage1_block0_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 256,
+      "params_per_unit": 256,
+      "group_params": 66304,
+      "group_mem_kb": 259.0,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "ffn_idx": 1,
+        "ed": 128,
+        "hidden_dim": 256
+      }
+    },
+    {
+      "id": "stage1_block0_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 113,
+      "group_params": 2992,
+      "group_mem_kb": 11.69,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 32,
+      "params_per_unit": 32,
+      "group_params": 2176,
+      "group_mem_kb": 8.5,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "v_slice": [
+          32,
+          64
+        ],
+        "proj_in_slice": [
+          0,
+          32
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 89,
+      "group_params": 2608,
+      "group_mem_kb": 10.19,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 32,
+      "params_per_unit": 32,
+      "group_params": 2176,
+      "group_mem_kb": 8.5,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "v_slice": [
+          32,
+          64
+        ],
+        "proj_in_slice": [
+          32,
+          64
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 73,
+      "group_params": 2352,
+      "group_mem_kb": 9.19,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 32,
+      "params_per_unit": 32,
+      "group_params": 2176,
+      "group_mem_kb": 8.5,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "v_slice": [
+          32,
+          64
+        ],
+        "proj_in_slice": [
+          64,
+          96
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 73,
+      "group_params": 2352,
+      "group_mem_kb": 9.19,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage1_block0_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 32,
+      "params_per_unit": 32,
+      "group_params": 2176,
+      "group_mem_kb": 8.5,
+      "meta": {
+        "stage": 1,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 32,
+        "in_channels": 32,
+        "v_slice": [
+          32,
+          64
+        ],
+        "proj_in_slice": [
+          96,
+          128
+        ]
+      }
+    },
+    {
+      "id": "stage1_subsample_pre_ffn",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 256,
+      "params_per_unit": 256,
+      "group_params": 66304,
+      "group_mem_kb": 259.0,
+      "meta": {
+        "stage": 1,
+        "block": "subsample_pre",
+        "ffn_idx": 0,
+        "ed": 128,
+        "hidden_dim": 256
+      }
+    },
+    {
+      "id": "stage2_subsample_post_ffn",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": "subsample_post",
+        "ffn_idx": 0,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage2_block0_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "ffn_idx": 0,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage2_block0_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "ffn_idx": 1,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage2_block0_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 177,
+      "group_params": 7152,
+      "group_mem_kb": 27.94,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          0,
+          64
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 153,
+      "group_params": 6768,
+      "group_mem_kb": 26.44,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          64,
+          128
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 137,
+      "group_params": 6512,
+      "group_mem_kb": 25.44,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          128,
+          192
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 137,
+      "group_params": 6512,
+      "group_mem_kb": 25.44,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage2_block0_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          192,
+          256
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "ffn_idx": 0,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage2_block1_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "ffn_idx": 1,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage2_block1_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 177,
+      "group_params": 7152,
+      "group_mem_kb": 27.94,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 0,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 0,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          0,
+          64
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 153,
+      "group_params": 6768,
+      "group_mem_kb": 26.44,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 1,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 1,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          64,
+          128
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 137,
+      "group_params": 6512,
+      "group_mem_kb": 25.44,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 2,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 2,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          128,
+          192
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 137,
+      "group_params": 6512,
+      "group_mem_kb": 25.44,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 3,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage2_block1_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 64,
+      "params_per_unit": 64,
+      "group_params": 6336,
+      "group_mem_kb": 24.75,
+      "meta": {
+        "stage": 2,
+        "block": 1,
+        "head": 3,
+        "key_dim": 16,
+        "d": 64,
+        "in_channels": 64,
+        "v_slice": [
+          32,
+          96
+        ],
+        "proj_in_slice": [
+          192,
+          256
+        ]
+      }
+    },
+    {
+      "id": "stage2_subsample_pre_ffn",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 512,
+      "params_per_unit": 512,
+      "group_params": 263680,
+      "group_mem_kb": 1030.0,
+      "meta": {
+        "stage": 2,
+        "block": "subsample_pre",
+        "ffn_idx": 0,
+        "ed": 256,
+        "hidden_dim": 512
+      }
+    },
+    {
+      "id": "stage3_subsample_post_ffn",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": "subsample_post",
+        "ffn_idx": 0,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block0_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "ffn_idx": 0,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block0_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "ffn_idx": 1,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block0_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 241,
+      "group_params": 13360,
+      "group_mem_kb": 52.19,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          0,
+          96
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 217,
+      "group_params": 12976,
+      "group_mem_kb": 50.69,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          96,
+          192
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          192,
+          288
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block0_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 0,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          288,
+          384
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "ffn_idx": 0,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block1_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "ffn_idx": 1,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block1_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 241,
+      "group_params": 13360,
+      "group_mem_kb": 52.19,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          0,
+          96
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 217,
+      "group_params": 12976,
+      "group_mem_kb": 50.69,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          96,
+          192
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          192,
+          288
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block1_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 1,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          288,
+          384
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_ffn0",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "ffn_idx": 0,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block2_ffn1",
+      "type": "G_FFN",
+      "lambda_rec": 0.005,
+      "unit_count": 768,
+      "params_per_unit": 768,
+      "group_params": 592128,
+      "group_mem_kb": 2313.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "ffn_idx": 1,
+        "ed": 384,
+        "hidden_dim": 768
+      }
+    },
+    {
+      "id": "stage3_block2_head0_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 241,
+      "group_params": 13360,
+      "group_mem_kb": 52.19,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          7,
+          7
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head0_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 0,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          0,
+          96
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head1_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 217,
+      "group_params": 12976,
+      "group_mem_kb": 50.69,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          5,
+          5
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head1_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 1,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          96,
+          192
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head2_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head2_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 2,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          192,
+          288
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head3_qk",
+      "type": "G_QK",
+      "lambda_rec": 0.01,
+      "unit_count": 16,
+      "params_per_unit": 201,
+      "group_params": 12720,
+      "group_mem_kb": 49.69,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "q_slice": [
+          0,
+          16
+        ],
+        "k_slice": [
+          16,
+          32
+        ],
+        "dw_kernel": [
+          3,
+          3
+        ]
+      }
+    },
+    {
+      "id": "stage3_block2_head3_v",
+      "type": "G_V",
+      "lambda_rec": 0.001,
+      "unit_count": 96,
+      "params_per_unit": 96,
+      "group_params": 12544,
+      "group_mem_kb": 49.0,
+      "meta": {
+        "stage": 3,
+        "block": 2,
+        "head": 3,
+        "key_dim": 16,
+        "d": 96,
+        "in_channels": 96,
+        "v_slice": [
+          32,
+          128
+        ],
+        "proj_in_slice": [
+          288,
+          384
+        ]
+      }
+    }
+  ]
+}

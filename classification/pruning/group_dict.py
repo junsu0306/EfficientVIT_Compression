@@ -34,21 +34,7 @@ import torch.nn as nn
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ffn_group(ffn_residual, group_id, stage, block_label, ffn_idx):
-    """
-    Residual(FFN) 모듈에서 G_FFN 그룹 dict를 생성합니다.
 
-    Parameters
-    ----------
-    ffn_residual : Residual(FFN)
-    group_id     : str  — 고유 식별자
-    stage        : int  — 스테이지 번호 (1/2/3)
-    block_label  : str  — 블록 레이블 (정수 또는 'subsample_pre'/'subsample_post')
-    ffn_idx      : int  — 블록 내 FFN 순서 (0=ffn0, 1=ffn1)
-
-    Returns
-    -------
-    dict with keys: id, type, lambda_rec, unit_count, modules, meta
-    """
     ffn = ffn_residual.m                          # FFN module
     ed  = ffn.pw1.c.in_channels                   # embedding dim
     hid = ffn.pw1.c.out_channels                  # hidden dim (= ed * 2)

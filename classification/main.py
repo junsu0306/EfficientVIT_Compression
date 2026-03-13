@@ -21,20 +21,32 @@ import os
 from pathlib import Path
 
 from timm.data import Mixup                                    # Mixup/CutMix 데이터 증강 유틸리티
-from timm.models import create_model                           # 모델 이름으로 모델 인스턴스 생성
+from timm.models import create_model
+from .model.build import EfficientViT_M4                           # 모델 이름으로 모델 인스턴스 생성
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy  # 레이블 스무딩 / 소프트 타겟 손실함수
 from timm.scheduler import create_scheduler                    # 학습률 스케줄러 생성
 from timm.optim import create_optimizer                        # 옵티마이저 생성
 from timm.utils import NativeScaler, get_state_dict, ModelEma  # AMP 스케일러, EMA 관련 유틸
 
-from data.samplers import RASampler             # Repeated Augmentation을 위한 커스텀 샘플러
-from data.datasets import build_dataset         # 데이터셋 빌드 함수
-from data.threeaugment import new_data_aug_generator  # ThreeAugment 데이터 증강 생성기
-from engine import train_one_epoch, evaluate    # 에폭 단위 학습 및 평가 함수
-from losses import DistillationLoss             # 지식 증류 손실함수 래퍼
+# 상대 경로 대신 절대 경로로 수정 (서버 환경 호환성)
+import sys
+import os
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)  # 맨 앞에 추가
 
-from model import build  # 모델 빌드 관련 모듈 (등록 목적)
-import utils             # 분산학습 초기화, 체크포인트 저장 등 유틸리티
+from .data.samplers import RASampler             # Repeated Augmentation을 위한 커스텀 샘플러
+from .data.datasets import build_dataset         # 데이터셋 빌드 함수
+from .data.threeaugment import new_data_aug_generator  # ThreeAugment 데이터 증강 생성기
+from .engine import train_one_epoch, evaluate    # 에폭 단위 학습 및 평가 함수
+from .losses import DistillationLoss             # 지식 증류 손실함수 래퍼
+
+from .model import build  # 모델 빌드 관련 모듈 (등록 목적)
+from . import utils             # 분산학습 초기화, 체크포인트 저장 등 유틸리티
+
+# PGM Pruning imports (Phase B)
+from .pruning.group_dict import build_pruning_groups
+from .pruning.memory_utils import compute_active_param_memory
+from .pruning.pgm_loss import pgm_regularization_loss, memory_penalty
 
 
 def get_args_parser():
@@ -263,7 +275,7 @@ def get_args_parser():
     # 데이터셋 및 실행 환경 관련 파라미터
     # ----------------------------------------------------------------
     # --data-path: 데이터셋 루트 디렉토리 경로
-    parser.add_argument('--data-path', default='/root/FastBaseline/data/imagenet', type=str,
+    parser.add_argument('--data-path', default='/workspace/etri_iitp/JS/EfficientViT/data', type=str,
                         help='dataset path')
     # --data-set: 사용할 데이터셋 종류.
     #   CIFAR: CIFAR-10/100, IMNET: ImageNet-1K, INAT/INAT19: iNaturalist
@@ -320,6 +332,27 @@ def get_args_parser():
     # --save_freq: 몇 에폭마다 체크포인트를 저장할지 지정. 1이면 매 에폭 저장
     parser.add_argument('--save_freq', default=1, type=int,
                         help='frequency of model saving')
+
+    # ----------------------------------------------------------------
+    # PGM Pruning parameters (Phase B)
+    # ----------------------------------------------------------------
+    parser.add_argument('--pruning', action='store_true',
+                        help='Enable PGM pruning during training')
+    parser.add_argument('--lambda-ffn', type=float, default=0.00002,
+                        help='L2 regularization strength for FFN groups (ratio 20:4:1), scaled down 1000x')
+    parser.add_argument('--lambda-qk', type=float, default=0.000004,
+                        help='L2 regularization strength for QK groups (ratio 20:4:1), scaled down 1000x')
+    parser.add_argument('--lambda-v', type=float, default=0.000001,
+                        help='L2 regularization strength for V groups (ratio 20:4:1), scaled down 1000x')
+    parser.add_argument('--mu', type=float, default=1.0,
+                        help='Memory penalty coefficient')
+    parser.add_argument('--m-max-mb', type=float, default=7.044,
+                        help='Maximum memory target in MB (80% optimization: 35.22 * 0.20 = 7.044 MB)')
+    parser.add_argument('--pruning-freq', type=int, default=100,
+                        help='Pruning frequency: apply pruning every N iterations')
+    parser.add_argument('--target-compression', type=float, default=0.80,
+                        help='Target optimization rate (fraction to REMOVE), e.g., 0.80 = remove 80%, keep 20%')
+
     return parser
 
 
@@ -452,8 +485,8 @@ def main(args):
     # distillation=True이면 분류 헤드 외에 증류 전용 헤드도 함께 생성됨
     # ----------------------------------------------------------------
     print(f"Creating model: {args.model}")
-    model = create_model(
-        args.model,
+    # timm create_model 대신 직접 모델 생성 (호환성 문제 해결)
+    model = EfficientViT_M4(
         num_classes=args.nb_classes,
         distillation=(args.distillation_type != 'none'),
         pretrained=False,
@@ -479,16 +512,28 @@ def main(args):
         # (사전학습 클래스 수 != 현재 태스크 클래스 수인 경우 발생)
         for k in ['head.l.weight', 'head.l.bias',
                   'head_dist.l.weight', 'head_dist.l.bias']:
-            if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                print(f"Removing key {k} from pretrained checkpoint")
+            if k in checkpoint_model and k in state_dict and checkpoint_model[k].shape != state_dict[k].shape:
+                print(f"Removing key {k} from pretrained checkpoint due to shape mismatch")
+                del checkpoint_model[k]
+            elif k in checkpoint_model and k not in state_dict:
+                print(f"Removing key {k} from pretrained checkpoint (not in current model)")
                 del checkpoint_model[k]
 
         # strict=False: 일치하지 않는 키가 있어도 무시하고 로드 (헤드를 제거했으므로 필요)
         msg = model.load_state_dict(checkpoint_model, strict=False)
-        print(msg)
+        print(f"Loading pretrained weights... {msg}")
 
     # 모델을 지정된 디바이스(GPU/CPU)로 이동
     model.to(device)
+
+    # ----------------------------------------------------------------
+    # PGM Pruning 그룹 로드 (Phase B)
+    # ----------------------------------------------------------------
+    pruning_groups = None
+    if args.pruning:
+        print("Loading PGM pruning groups...")
+        pruning_groups = build_pruning_groups(model)
+        print(f"Loaded {len(pruning_groups)} pruning groups")
 
     # ----------------------------------------------------------------
     # EMA(Exponential Moving Average) 모델 설정
@@ -663,6 +708,10 @@ def main(args):
             # set_training_mode=args.finetune == ''  # keep in eval mode during finetuning
             set_training_mode=True,
             set_bn_eval=args.set_bn_eval, # set bn to eval if finetune
+            pruning_groups=pruning_groups,
+            lambda_ffn=args.lambda_ffn, lambda_qk=args.lambda_qk, lambda_v=args.lambda_v,
+            mu=args.mu, m_max_mb=args.m_max_mb,
+            pruning_freq=args.pruning_freq, target_compression=args.target_compression,
         )
 
         # 현재 에폭에 맞게 학습률 스케줄 업데이트

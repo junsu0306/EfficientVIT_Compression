@@ -323,11 +323,13 @@ pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorc
 pip install timm==0.9.12 einops Pillow matplotlib tqdm ipykernel
 
 # 2. Phase A 실행
-cd /path/to/EfficientVIT_Compression
+cd /workspace/etri_iitp/JS/EfficientViT
 python -m classification.pruning.phase_a_profile \
-    --device cuda \
+    --device cuda:0 \
     --pretrained EfficientViT_M4 \
     --output classification/pruning/reports/phase_a_report.json
+
+# GPU 0번을 사용하도록 --device cuda:0으로 설정되었습니다.
 
 # 3. 결과 확인 → M_max 값 기록
 python -c "
@@ -342,65 +344,93 @@ Phase A 성공 기준: `phase_a_report.json` 생성, 총 67개 그룹, M_max 값
 
 ---
 
-### 다음 단계 — Phase B (아직 미구현)
+### Phase B — Physical Pruning (구현 완료, 서버 실행 대기)
 
-**Phase B에서 구현해야 할 것:**
+> **방식 변경**: Soft Masking → Physical Pruning
+> **이유**: Soft masking은 weight를 0으로만 설정하여 실제 모델 크기/연산량 감소가 없음
 
-1. **`classification/pruning/pgm_loss.py`** — PGM 정규화 항 계산
-   ```python
-   def pgm_regularization_loss(groups, lambda_ffn, lambda_qk, lambda_v):
-       # G_FFN: expand.weight[k] + shrink.weight[:,k] 의 L2 norm 합산
-       # G_QK:  qkv.weight[q_slice] + qkv.weight[k_slice] 의 L2 norm 합산
-       # G_V:   qkv.weight[v_slice] 의 L2 norm 합산
-       return loss_ffn + loss_qk + loss_v
-   ```
+#### 구현된 파일
 
-2. **`classification/pruning/soft_threshold.py`** — optimizer.step() 직후 실행
-   ```python
-   def apply_group_soft_threshold(groups, eta, lambda_ffn, lambda_qk, lambda_v):
-       # CLAUDE.md §5.2 알고리즘:
-       # norm_g = ||w_g||_2
-       # if norm_g > eta * lambda_g: w_g *= (1 - eta*lambda_g / norm_g)
-       # else: w_g = 0
-   ```
-
-3. **`classification/pruning/phase_b_train.py`** — 훈련 루프
-   - 기존 `classification/main.py` 기반
-   - Loss = CE + PGM 정규화 + 메모리 패널티 (μ · max(0, mem - M_max))
-   - 매 optimizer.step() 후 soft thresholding 호출
-   - 10 epoch마다 `count_zero_groups()` 출력으로 λ 진단
-   - Distillation 없음 (Phase B)
-
-4. **`classification/pruning/phase_b_sweep.py`** — λ sweep 실험 자동화
-   - λ_FFN ∈ {0.002, 0.005, 0.010}, λ_QK ∈ {0.005, 0.010, 0.020}
-   - 각 설정으로 100 epoch 훈련 후 zero ratio + Top-1 acc 기록
-
-**Phase B 서버 실행 예정 명령어:**
-```bash
-# λ 기본값으로 단일 실행
-python -m classification.pruning.phase_b_train \
-    --model EfficientViT_M4 \
-    --resume /path/to/pretrained_M4.pth \
-    --data-path /path/to/ImageNet \
-    --lambda-ffn 0.005 --lambda-qk 0.010 --lambda-v 0.001 \
-    --mu 1.0 --lr 1e-4 --epochs 100 \
-    --output-dir classification/pruning/checkpoints/phase_b_default
-
-# λ sweep 자동화
-python -m classification.pruning.phase_b_sweep \
-    --data-path /path/to/ImageNet \
-    --resume /path/to/pretrained_M4.pth
 ```
+classification/pruning/
+├── structural_pruning.py         ← 핵심 physical pruning 모듈
+│   ├── compute_ffn_importance()      - FFN importance 계산
+│   ├── prune_ffn_physically()        - FFN 물리적 축소
+│   ├── compute_qk_importance()       - Q/K importance 계산
+│   ├── prune_cga_head_qk_physically() - CGA Q/K 물리적 축소
+│   ├── IterativePhysicalPruner       - epoch별 pruning 관리
+│   └── validate_model_forward()      - shape 검증
+│
+├── train_physical_pruning.py     ← Physical-Only (CE만)
+├── train_combined_pruning.py     ← Combined (CE + λ regularization)
+│
+├── pgm_loss.py                   ← 기존 soft masking (참고용, deprecated)
+├── group_dict.py                 ← 67개 pruning group 정의
+├── memory_utils.py               ← 메모리 측정 유틸리티
+│
+└── PHASE_B_ITERATIVE.md          ← 상세 문서
+```
+
+#### 두 가지 버전
+
+| 항목 | Physical-Only | Combined |
+|------|---------------|----------|
+| Loss | CE only | CE + λ·Σ‖w‖² |
+| 파일 | `train_physical_pruning.py` | `train_combined_pruning.py` |
+| 특징 | 빠른 실험용 | 안정적 pruning |
+
+#### 하이퍼파라미터 (기본값)
+
+| 파라미터 | 값 | 설명 |
+|----------|-----|------|
+| batch-size | 256 | GPU 메모리에 따라 조정 |
+| lr | 1e-4 | AdamW 학습률 |
+| target-reduction | 0.76 | 76% 압축 목표 |
+| ffn-prune-per-epoch | 0.08 | FFN 매 epoch 8% 제거 |
+| qk-prune-per-epoch | 0.10 | Q/K 매 epoch 10% 제거 |
+| pruning-epochs | 15 | Pruning 진행 epoch |
+| finetune-epochs | 10 | 후속 finetune epoch |
+| λ_FFN (Combined) | 1e-4 | FFN 정규화 강도 |
+| λ_QK (Combined) | 5e-5 | Q/K 정규화 강도 |
+| λ_V (Combined) | 1e-5 | V 보존 (작게 설정) |
+
+#### 서버 실행 명령어
+
+```bash
+# Physical-Only (CE만)
+python -m classification.pruning.train_physical_pruning \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --output-dir classification/pruning/checkpoints/physical_only_76pct
+
+# Combined (λ + Physical) — 권장
+python -m classification.pruning.train_combined_pruning \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --lambda-ffn 0.0001 --lambda-qk 0.00005 --lambda-v 0.00001 \
+    --output-dir classification/pruning/checkpoints/combined_76pct
+```
+
+#### 예상 결과
+
+| 단계 | Acc@1 | 모델 크기 | 압축률 |
+|------|-------|-----------|--------|
+| 초기 (M4) | 74.3% | 35.2 MB | 0% |
+| Pruning 후 | ~58% | 8.4 MB | 76% |
+| Finetune 후 | ~68% | 8.4 MB | 76% |
+| + KD (Phase C) | ~72% | 8.4 MB | 76% |
 
 ---
 
-### Phase C / D / E 예정 (Phase B 완료 후)
+### Phase C / D / E 예정 (Phase B 서버 실행 후)
 
-| Phase | 구현 예정 파일 | 핵심 내용 |
-|---|---|---|
-| C | `phase_c_train.py` | Phase B + KD loss (M5 teacher), 76% 목표 |
-| D | `phase_d_compare.py` | M4 vs YOLOv8n pruning 결과 비교 리포트 |
-| E | `phase_e_ablation.py` | G_FFN only / +G_QK / +G_V ablation 실험 |
+| Phase | 상태 | 구현 예정 파일 | 핵심 내용 |
+|---|---|---|---|
+| C | 🔜 예정 | `train_physical_kd.py` | Physical Pruning + KD loss (M5 teacher) |
+| D | 🔜 예정 | `phase_d_compare.py` | M4 vs YOLOv8n pruning 결과 비교 |
+| E | 🔜 예정 | `phase_e_ablation.py` | G_FFN only / +G_QK / +G_V ablation |
 
 Phase C 추가 구현:
 - KD loss: `α · KL(softmax(z_T/T) || log_softmax(z_S/T)) · T²`
@@ -409,21 +439,18 @@ Phase C 추가 구현:
 
 ---
 
-### Structure Extraction (모든 Phase 공통, 훈련 후 실행)
+### Structure Extraction (Physical Pruning에서 자동 처리)
 
-**아직 미구현. 구현 위치: `classification/pruning/reduce.py`**
+> **Note**: Physical Pruning 방식에서는 매 epoch 물리적으로 Conv2d/Linear를 축소하므로 별도 extraction 불필요
 
-CLAUDE.md §6 기준으로 구현:
-- FFN: expand/shrink weight에서 zero row 제거
-- QK: Q norms 기준으로 keep 인덱스 결정 → Q와 K 동일 인덱스 적용
-- V: v_slice norms 기준, proj input slice도 함께 정리
-- DW conv: groups = in_channels = out_channels 동기화
+`structural_pruning.py`에서 처리:
+- FFN: `prune_ffn_physically()` — expand/shrink weight 직접 축소
+- QK: `prune_cga_head_qk_physically()` — Q/K 동일 인덱스로 축소
+- DW conv: groups = in_channels = out_channels 자동 동기화
 
-검증 assertion (CLAUDE.md §6):
+검증 (매 pruning step 후 자동 실행):
 ```python
-assert new_expand.out_channels == new_shrink.in_channels
-assert new_Q.out_channels == new_K.out_channels
-_ = reduced_model(torch.zeros(1, 3, 224, 224))  # forward pass 검증
-opt_rate = 100 * (size_B - size_A) / size_B
-assert opt_rate >= 76.0
+validate_model_forward(model, device)  # forward pass 검증
+opt_rate = 100 * (original_size - current_size) / original_size
+# 학습 중 콘솔에 출력됨
 ```

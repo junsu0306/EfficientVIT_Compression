@@ -679,9 +679,26 @@ def load_model(modelpath, model):
     '''
     # 체크포인트를 CPU로 로드 (GPU 메모리 절약, 이후 model.to(device)로 이동)
     checkpoint = torch.load(modelpath, map_location='cpu')
-    state_dict = checkpoint['model']
+
+    # NOTE: checkpoint can be either a dict with a 'model' key (common in savers)
+    # or directly a state_dict saved via torch.save(model.state_dict(), ...)
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
+        state_dict = checkpoint['model']
+    elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    else:
+        # fallback: treat checkpoint itself as a state dict
+        state_dict = checkpoint
+
     model_state_dict = model.state_dict()
-        # bicubic interpolate attention_biases if not match
+
+    print(f"Loaded checkpoint from {modelpath}")
+    print(f"Checkpoint type: {type(checkpoint)}")
+    if isinstance(checkpoint, dict):
+        print(f"Checkpoint keys: {list(checkpoint.keys())}")
+    print(f"State dict has {len(state_dict)} keys")
+    print(f"Model state dict has {len(model_state_dict)} keys")
+    # bicubic interpolate attention_biases if not match
 
     # [Step 1] attention_bias_idxs 키 제거
     # attention_bias_idxs는 각 쿼리-키 쌍의 상대 위치 인덱스 맵으로,
@@ -698,6 +715,10 @@ def load_model(modelpath, model):
     relative_position_bias_table_keys = [
         k for k in state_dict.keys() if "attention_biases" in k]
     for k in relative_position_bias_table_keys:
+        # Check if the key exists in current model state_dict
+        if k not in model_state_dict:
+            print(f"Skipping key {k} - not found in current model")
+            continue
         relative_position_bias_table_pretrained = state_dict[k]        # 사전학습 편향 (nH1, L1)
         relative_position_bias_table_current = model_state_dict[k]     # 현재 모델 편향 (nH2, L2)
         nH1, L1 = relative_position_bias_table_pretrained.size()       # 사전학습 헤드 수, 위치 수
@@ -727,6 +748,12 @@ def load_model(modelpath, model):
                 # 보간된 편향을 현재 모델 크기 (nH2, L2)로 변환하여 state_dict에 저장
                 state_dict[k] = relative_position_bias_table_pretrained_resized.view(
                     nH2, L2)
+
     # 수정된 state_dict를 체크포인트에 반영하여 반환
-    checkpoint['model'] = state_dict
+    # If checkpoint was originally a dict with 'model' key, update it
+    # Otherwise, create a new dict with 'model' key
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
+        checkpoint['model'] = state_dict
+    else:
+        checkpoint = {'model': state_dict}
     return checkpoint

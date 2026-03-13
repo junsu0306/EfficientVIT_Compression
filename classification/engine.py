@@ -13,8 +13,8 @@ import torch
 from timm.data import Mixup
 from timm.utils import accuracy, ModelEma
 
-from losses import DistillationLoss
-import utils
+from .losses import DistillationLoss
+from . import utils
 
 
 def set_bn_state(model):
@@ -45,7 +45,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     clip_mode: str = 'norm',
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True,
-                    set_bn_eval=False,):
+                    set_bn_eval=False,
+                    pruning_groups=None, lambda_ffn=0.00002, lambda_qk=0.000004, lambda_v=0.000001,
+                    mu=1.0, m_max_mb=7.044, pruning_freq=100, target_compression=0.80):
     """
     [한국어 설명]
     역할:
@@ -89,10 +91,20 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 100  # 100 배치마다 한 번씩 진행 상황 출력
 
+    # Pruning 카운터 초기화
+    iteration_counter = 0
+    # Prunable groups의 초기 메모리 계산 (첫 epoch 시작 시 한 번만)
+    if pruning_groups is not None:
+        from .pruning.memory_utils import compute_active_param_memory
+        original_prunable_mb = compute_active_param_memory(pruning_groups) / 1e6
+    else:
+        original_prunable_mb = 0.0
+
     # 데이터 로더를 순회하며 배치별 학습 수행
     # metric_logger.log_every: 이터레이터를 감싸 ETA, 처리 시간 등을 주기적으로 출력
     for samples, targets in metric_logger.log_every(
             data_loader, print_freq, header):
+        iteration_counter += 1
 
         # 데이터를 GPU로 비동기 전송 (non_blocking=True: CPU-GPU 전송과 연산을 병렬 수행)
         samples = samples.to(device, non_blocking=True)
@@ -110,6 +122,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
             outputs = model(samples)
             # 손실 계산: DistillationLoss가 base_loss + distill_loss를 결합하여 반환
             loss = criterion(samples, outputs, targets)
+
+            # PGM Pruning regularization loss 추가 (Phase B)
+            if pruning_groups is not None:
+                from .pruning.pgm_loss import pgm_regularization_loss, memory_penalty
+                from .pruning.memory_utils import compute_active_param_memory
+                pgm_loss = pgm_regularization_loss(pruning_groups, lambda_ffn, lambda_qk, lambda_v)
+                current_mem_mb = compute_active_param_memory(pruning_groups) / 1e6
+                mem_penalty = memory_penalty(current_mem_mb, m_max_mb, mu)
+                loss += pgm_loss + mem_penalty
 
         # 스칼라 값으로 변환하여 로깅 (텐서에서 파이썬 float로)
         loss_value = loss.item()
@@ -138,6 +159,57 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         loss_scaler(loss, optimizer, clip_grad=clip_grad, clip_mode=clip_mode,
                     parameters=model.parameters(), create_graph=is_second_order)
 
+        # CRITICAL FIX: Pruned weights를 매 iteration마다 0으로 재설정
+        # optimizer.step()에서 gradient로 복원되는 것을 방지
+        if pruning_groups is not None:
+            from .pruning.pgm_loss import apply_pruned_mask
+            apply_pruned_mask(pruning_groups)
+
+        # Phase B: Iteration-level pruning (주기적 실행 + 목표치 제한)
+        # pruning_freq 마다 한 번씩 실행 (예: 100 iterations마다)
+        if pruning_groups is not None and iteration_counter % pruning_freq == 0:
+            from .pruning.pgm_loss import apply_phase1_pruning
+            from .pruning.memory_utils import compute_active_param_memory
+            current_mem_mb = compute_active_param_memory(pruning_groups) / 1e6
+
+            # 현재 제거 비율 계산 (prunable 부분 기준)
+            removed_ratio = (original_prunable_mb - current_mem_mb) / original_prunable_mb
+
+            # 목표 제거 비율 도달 확인 (target_compression = 제거할 비율)
+            # 예: target_compression=0.80이면 80% 제거, 20% 유지
+            if removed_ratio < target_compression:
+                # 모니터링 출력
+                print(f"\n[Pruning Iter {iteration_counter}]")
+                print(f"  Prunable Memory: {current_mem_mb:.2f} / {original_prunable_mb:.2f} MB ({(1-removed_ratio)*100:.1f}% remaining)")
+                print(f"  Removed: {removed_ratio*100:.1f}% (Target: {target_compression*100:.0f}%)")
+
+                # 동적 sparsity 계산 (주기적 실행이므로 비율 증가)
+                sparsities = {}
+                for gtype in ['G_FFN', 'G_QK', 'G_V']:
+                    # 주기당 기본 제거 비율 (pruning_freq=100 기준)
+                    # 80% 목표를 위해 증가: 기존 대비 2배 증가
+                    # ImageNet-1K: ~5000 iter/epoch, 50 pruning/epoch
+                    # 80% 도달: ~2 epochs (50 * 0.02 * 2 = 2.0 = 200% removed from some groups)
+                    base_sparsity_per_freq = {
+                        'G_FFN': 0.020,  # 2.0% per 100 iterations (ratio 20)
+                        'G_QK':  0.004,  # 0.4% per 100 iterations (ratio 4)
+                        'G_V':   0.001   # 0.1% per 100 iterations (ratio 1)
+                    }[gtype]
+
+                    # 메모리 초과 시 sparsity 증가
+                    if current_mem_mb > m_max_mb:
+                        extra = min(0.05, (current_mem_mb - m_max_mb) / m_max_mb * 0.1)
+                        sparsities[gtype] = min(0.15, base_sparsity_per_freq + extra)
+                    else:
+                        sparsities[gtype] = base_sparsity_per_freq
+
+                # Pruning 실행 (verbose=False로 요약만 출력)
+                apply_phase1_pruning(model, pruning_groups, sparsities, verbose=False)
+            else:
+                # 목표 도달 시 알림 (처음 1회만)
+                if iteration_counter % (pruning_freq * 10) == 0:  # 1000 iterations마다
+                    print(f"\n[Pruning Iter {iteration_counter}] Target reached: {removed_ratio*100:.1f}% removed (goal: {target_compression*100:.0f}%)")
+
         # GPU 연산이 모두 완료될 때까지 대기 (비동기 CUDA 연산 동기화)
         # 이후의 EMA 업데이트 등이 올바른 파라미터값으로 수행되도록 보장
         torch.cuda.synchronize()
@@ -159,6 +231,31 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     # 내부적으로 dist.all_reduce를 사용하여 count와 total을 합산
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+
+    # Phase B: Epoch 종료 후 통계 출력 (pruning은 주기적으로 수행됨)
+    if pruning_groups is not None:
+        from .pruning.pgm_loss import count_zero_groups
+        from .pruning.memory_utils import compute_active_param_memory
+
+        # 현재 메모리 및 zero 그룹 통계 출력
+        current_mem_mb = compute_active_param_memory(pruning_groups) / 1e6
+        removed_ratio = (original_prunable_mb - current_mem_mb) / original_prunable_mb
+        zero_counts = count_zero_groups(pruning_groups)
+
+        print(f"\n{'='*70}")
+        print(f"[Epoch {epoch} Pruning Summary]")
+        print(f"{'='*70}")
+        print(f"  Prunable Memory (Active):  {current_mem_mb:.2f} MB / {original_prunable_mb:.2f} MB")
+        print(f"  Removed from Prunable:     {removed_ratio*100:.1f}% (Target: {target_compression*100:.0f}%)")
+        print(f"  Target Prunable Memory:    {m_max_mb:.2f} MB")
+        print(f"  Total Iterations:          {iteration_counter}")
+        print(f"  Zero Groups by Type:")
+        for gtype in ['G_FFN', 'G_QK', 'G_V', 'G_PATCH']:
+            if gtype in zero_counts:
+                stats = zero_counts[gtype]
+                print(f"    {gtype:8s}: {stats['zero_units']:4d}/{stats['total_units']:4d} units ({stats['zero_ratio']*100:5.1f}%)")
+        print(f"{'='*70}")
+
     # 각 메트릭의 에폭 전체 평균값을 딕셔너리로 반환
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 

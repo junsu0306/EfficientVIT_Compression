@@ -104,72 +104,41 @@ jupyter lab --no-browser --port=8888 --ip=0.0.0.0
 ### 5단계 — 프로젝트 설정
 
 ```bash
-# 프로젝트 루트로 이동
-cd /path/to/EfficientVIT_Compression
+# 프로젝트 루트로 이동 (서버 경로)
+cd /workspace/etri_iitp/JS/EfficientViT
 
 # Python path 설정 (스크립트 실행 시마다 필요)
-export PYTHONPATH=/path/to/EfficientVIT_Compression:$PYTHONPATH
+export PYTHONPATH=/workspace/etri_iitp/JS/EfficientViT:$PYTHONPATH
 
 # 또는 .bashrc에 영구 등록
-echo 'export PYTHONPATH=/path/to/EfficientVIT_Compression:$PYTHONPATH' >> ~/.bashrc
+echo 'export PYTHONPATH=/workspace/etri_iitp/JS/EfficientViT:$PYTHONPATH' >> ~/.bashrc
 source ~/.bashrc
 ```
 
 ---
 
-## 서버 실행 명령어
+## 서버 실행 명령어 (터미널에서 직접 실행)
 
 ### 환경 준비 확인
 
 ```bash
 conda activate efficientvit
-cd /path/to/EfficientVIT_Compression
+cd /workspace/etri_iitp/JS/EfficientViT
 python -c "from classification.model.build import EfficientViT_M4; print('OK')"
 ```
 
-### Option 1 — CPU만으로 구조 분석 (빠름, GPU 불필요)
+### Phase A 실행 (GPU 0번 사용)
 
 ```bash
+cd /workspace/etri_iitp/JS/EfficientViT
 python -m classification.pruning.phase_a_profile \
-    --device cpu \
-    --output classification/pruning/reports/phase_a_report.json
-```
-
-### Option 2 — GPU + pretrained weights (권장, 실제 메모리 측정 포함)
-
-```bash
-python -m classification.pruning.phase_a_profile \
-    --device cuda \
+    --device cuda:0 \
     --pretrained EfficientViT_M4 \
-    --output classification/pruning/reports/phase_a_report.json
+    --output classification/pruning/reports/phase_a_report_1.json
 ```
 
 > `--pretrained EfficientViT_M4` 지정 시 GitHub에서 자동 다운로드됩니다.
-> 구조 분석이 목적이라면 CPU + 랜덤 초기화로도 동일한 결과를 얻을 수 있습니다.
-
----
-
-### Option 3 — Jupyter Notebook에서 실행
-
-Jupyter 노트북 셀에 아래 코드를 순서대로 실행합니다.
-
-**셀 1 — 경로 설정**
-```python
-import sys, os
-# 프로젝트 루트 경로를 직접 지정
-PROJECT_ROOT = '/path/to/EfficientVIT_Compression'
-sys.path.insert(0, PROJECT_ROOT)
-os.chdir(PROJECT_ROOT)
-```
-
-**셀 2 — Phase A 실행**
-```python
-# 터미널 명령어를 노트북에서 그대로 실행
-!python -m classification.pruning.phase_a_profile \
-    --device cuda \
-    --pretrained EfficientViT_M4 \
-    --output classification/pruning/reports/phase_a_report.json
-```
+> GPU 0번을 사용하도록 --device cuda:0으로 설정되었습니다.
 
 **셀 3 — 결과 리포트 확인**
 ```python
