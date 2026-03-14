@@ -78,8 +78,8 @@ def get_args_parser():
     parser.add_argument('--target-reduction', default=0.76, type=float)
     parser.add_argument('--ffn-prune-per-epoch', default=0.25, type=float,
                         help='FFN: 매 epoch 25%% 제거 (매우 공격적)')
-    parser.add_argument('--qk-prune-per-epoch', default=0.05, type=float,
-                        help='QK: 매 epoch 5%% 제거')
+    parser.add_argument('--qk-prune-per-epoch', default=0.15, type=float,
+                        help='QK: 매 epoch 15%% 제거 (공격적)')
     parser.add_argument('--min-ffn-ratio', default=0.05, type=float,
                         help='FFN 최소 5%% 유지 (최대 95%% pruning)')
     parser.add_argument('--min-qk-ratio', default=0.25, type=float,
@@ -358,7 +358,38 @@ def main(args):
 
     history = {'train_loss': [], 'reg_loss': [], 'mem_penalty': [], 'val_acc1': [], 'model_size_mb': [], 'reduction': []}
     best_acc1 = 0.0
+    pruning_end_acc1 = 0.0
+    pruning_end_size = 0.0
+    pruning_end_reduction = 0.0
     start_time = time.time()
+
+    # Epoch별 핵심 로그 파일 초기화
+    log_path = os.path.join(args.output_dir, 'training_log.txt')
+    with open(log_path, 'w') as f:
+        f.write("=" * 100 + "\n")
+        f.write("Combined Pruning (λ + Physical) Training Log\n")
+        f.write("=" * 100 + "\n")
+        f.write(f"Start time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Model: {args.model}\n")
+        f.write(f"Original size: {original_size:.2f} MB\n")
+        f.write(f"Target reduction: {args.target_reduction*100:.0f}%\n")
+        f.write(f"M_max: {m_max_mb:.2f} MB\n")
+        f.write(f"FFN prune/epoch: {args.ffn_prune_per_epoch*100:.0f}%\n")
+        f.write(f"QK prune/epoch: {args.qk_prune_per_epoch*100:.0f}%\n")
+        f.write(f"Min FFN ratio: {args.min_ffn_ratio*100:.0f}%\n")
+        f.write(f"Min QK ratio: {args.min_qk_ratio*100:.0f}%\n")
+        f.write(f"λ_FFN: {args.lambda_ffn}, λ_QK: {args.lambda_qk}, λ_V: {args.lambda_v}\n")
+        f.write(f"λ ratio: FFN:QK:V = {args.lambda_ffn/args.lambda_v:.0f}:{args.lambda_qk/args.lambda_v:.0f}:1\n")
+        f.write(f"μ (memory penalty): {args.mu}\n")
+        f.write(f"Pruning epochs: {args.pruning_epochs}\n")
+        f.write(f"Finetune epochs: {args.finetune_epochs}\n")
+        f.write(f"Batch size: {args.batch_size}\n")
+        f.write(f"Learning rate: {args.lr}\n")
+        f.write(f"Initial Acc@1: {test_stats['acc1']:.2f}%\n")
+        f.write("-" * 100 + "\n")
+        f.write(f"{'Epoch':>5} | {'Phase':>8} | {'Loss':>8} | {'Reg':>7} | {'MemPen':>7} | "
+                f"{'Acc@1':>7} | {'Acc@5':>7} | {'Size(MB)':>9} | {'Reduced':>8} | {'Best':>5} | {'Time':>10}\n")
+        f.write("-" * 100 + "\n")
 
     # Current lambda values (will decay during finetune)
     current_lambda_ffn = args.lambda_ffn
@@ -367,9 +398,11 @@ def main(args):
 
     for epoch in range(total_epochs):
         is_pruning_phase = epoch < args.pruning_epochs
+        epoch_start = time.time()
+        phase = 'PRUNE' if is_pruning_phase else 'FINETUNE'
 
         print(f"\n{'='*60}")
-        print(f"Epoch {epoch + 1}/{total_epochs} {'[PRUNING]' if is_pruning_phase else '[FINETUNE]'}")
+        print(f"Epoch {epoch + 1}/{total_epochs} [{phase}]")
         print(f"  λ_FFN={current_lambda_ffn:.2e}, λ_QK={current_lambda_qk:.2e}, λ_V={current_lambda_v:.2e}")
         print('='*60)
 
@@ -407,44 +440,88 @@ def main(args):
         # Stats
         current_size = compute_model_size_mb(model)
         current_reduction = 1.0 - current_size / original_size
+        epoch_time = str(datetime.timedelta(seconds=int(time.time() - epoch_start)))
+        reg_loss = train_stats.get('reg', 0)
+        mem_pen = train_stats.get('mem_pen', 0)
 
         history['train_loss'].append(train_stats['loss'])
-        history['reg_loss'].append(train_stats.get('reg', 0))
-        history['mem_penalty'].append(train_stats.get('mem_pen', 0))
+        history['reg_loss'].append(reg_loss)
+        history['mem_penalty'].append(mem_pen)
         history['val_acc1'].append(test_stats['acc1'])
         history['model_size_mb'].append(current_size)
         history['reduction'].append(current_reduction)
 
-        print(f"\n[Summary] Loss: {train_stats['loss']:.4f} (reg: {train_stats.get('reg', 0):.4f}, mem: {train_stats.get('mem_pen', 0):.4f}) | "
+        print(f"\n[Summary] Loss: {train_stats['loss']:.4f} (reg: {reg_loss:.4f}, mem: {mem_pen:.4f}) | "
               f"Acc@1: {test_stats['acc1']:.2f}% | Size: {current_size:.2f}MB ({current_reduction*100:.1f}% reduced)")
 
+        # Pruning phase 마지막 epoch 기록
+        if epoch == args.pruning_epochs - 1 or (epoch < args.pruning_epochs and pruner.target_reached):
+            pruning_end_acc1 = test_stats['acc1']
+            pruning_end_size = current_size
+            pruning_end_reduction = current_reduction
+
         # Save best
+        is_best = False
         if test_stats['acc1'] > best_acc1:
             best_acc1 = test_stats['acc1']
+            is_best = True
             torch.save({
                 'epoch': epoch, 'model': model.state_dict(),
                 'acc1': best_acc1, 'size_mb': current_size,
             }, os.path.join(args.output_dir, 'best_combined.pth'))
             print(f"  >>> New best: {best_acc1:.2f}%")
 
+        # Epoch별 핵심 로그 기록
+        with open(log_path, 'a') as f:
+            f.write(f"{epoch+1:>5} | {phase:>8} | {train_stats['loss']:>8.4f} | "
+                    f"{reg_loss:>7.4f} | {mem_pen:>7.4f} | "
+                    f"{test_stats['acc1']:>6.2f}% | {test_stats['acc5']:>6.2f}% | "
+                    f"{current_size:>8.2f} | {current_reduction*100:>6.1f}% | "
+                    f"{'*' if is_best else ' ':>5} | {epoch_time:>10}\n")
+
     # Final summary
     total_time = str(datetime.timedelta(seconds=int(time.time() - start_time)))
     final_size = compute_model_size_mb(model)
+
+    final_acc1 = test_stats['acc1']
+    final_acc5 = test_stats['acc5']
 
     print(f"\n{'='*70}")
     print("Combined Pruning Complete!")
     print(f"{'='*70}")
     print(f"  Method: Combined (λ + Memory Penalty + Physical)")
     print(f"  λ_FFN: {args.lambda_ffn}, λ_QK: {args.lambda_qk}, λ_V: {args.lambda_v}")
-    print(f"  λ ratio: FFN:QK:V = {args.lambda_ffn/args.lambda_v:.0f}:{args.lambda_qk/args.lambda_v:.0f}:1")
-    print(f"  μ (memory penalty): {args.mu}")
-    print(f"  M_max: {m_max_mb:.2f} MB")
     print(f"  Original: {original_size:.2f} MB")
     print(f"  Final: {final_size:.2f} MB ({(1-final_size/original_size)*100:.1f}% reduced)")
-    print(f"  Best Acc@1: {best_acc1:.2f}%")
+    print(f"  Pruning 후 Acc@1: {pruning_end_acc1:.2f}% (size: {pruning_end_size:.2f}MB, {pruning_end_reduction*100:.1f}% reduced)")
+    print(f"  Finetune 후 Acc@1: {final_acc1:.2f}% (최종)")
     print(f"  Time: {total_time}")
 
-    # Save summary
+    # 최종 요약도 로그에 기록
+    with open(log_path, 'a') as f:
+        f.write("-" * 100 + "\n")
+        f.write(f"\nFINAL RESULTS\n")
+        f.write(f"  Method: Combined (λ + Memory Penalty + Physical)\n")
+        f.write(f"  λ_FFN: {args.lambda_ffn}, λ_QK: {args.lambda_qk}, λ_V: {args.lambda_v}\n")
+        f.write(f"  λ ratio: FFN:QK:V = {args.lambda_ffn/args.lambda_v:.0f}:{args.lambda_qk/args.lambda_v:.0f}:1\n")
+        f.write(f"  μ: {args.mu}, M_max: {m_max_mb:.2f} MB\n")
+        f.write(f"  Original size: {original_size:.2f} MB\n")
+        f.write(f"  Final size: {final_size:.2f} MB ({(1-final_size/original_size)*100:.1f}% reduced)\n")
+        f.write(f"\n")
+        f.write(f"  [Pruning 완료 시점]\n")
+        f.write(f"    Acc@1: {pruning_end_acc1:.2f}%\n")
+        f.write(f"    Size: {pruning_end_size:.2f} MB ({pruning_end_reduction*100:.1f}% reduced)\n")
+        f.write(f"\n")
+        f.write(f"  [Finetune 완료 시점 (최종)]\n")
+        f.write(f"    Acc@1: {final_acc1:.2f}%\n")
+        f.write(f"    Acc@5: {final_acc5:.2f}%\n")
+        f.write(f"    Size: {final_size:.2f} MB ({(1-final_size/original_size)*100:.1f}% reduced)\n")
+        f.write(f"\n")
+        f.write(f"  Accuracy 회복: {pruning_end_acc1:.2f}% → {final_acc1:.2f}% ({final_acc1-pruning_end_acc1:+.2f}%)\n")
+        f.write(f"  Total time: {total_time}\n")
+        f.write(f"  End time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    # Save summary JSON
     summary = {
         'method': 'combined_lambda_memory_physical',
         'lambda_ffn': args.lambda_ffn,
@@ -456,7 +533,12 @@ def main(args):
         'original_size_mb': original_size,
         'final_size_mb': final_size,
         'reduction': 1 - final_size/original_size,
-        'best_acc1': best_acc1,
+        'pruning_end_acc1': pruning_end_acc1,
+        'pruning_end_size_mb': pruning_end_size,
+        'pruning_end_reduction': pruning_end_reduction,
+        'final_acc1': final_acc1,
+        'final_acc5': final_acc5,
+        'acc_recovery': final_acc1 - pruning_end_acc1,
         'history': history,
         'args': vars(args),
     }
@@ -464,6 +546,7 @@ def main(args):
         json.dump(summary, f, indent=2)
 
     print(f"\nResults saved to: {args.output_dir}")
+    print(f"Training log: {log_path}")
 
 
 if __name__ == '__main__':

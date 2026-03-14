@@ -349,7 +349,7 @@ def main():
     parser.add_argument('--target-reduction', default=0.76, type=float,
                         help='Target reduction (0.76 = 76%%)')
     parser.add_argument('--ffn-prune-per-epoch', default=0.25, type=float)
-    parser.add_argument('--qk-prune-per-epoch', default=0.05, type=float)
+    parser.add_argument('--qk-prune-per-epoch', default=0.15, type=float)
     parser.add_argument('--min-ffn-ratio', default=0.05, type=float)
     parser.add_argument('--min-qk-ratio', default=0.25, type=float)
 

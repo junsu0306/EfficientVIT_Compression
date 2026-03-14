@@ -441,7 +441,7 @@ python -m classification.pruning.train_physical_pruning \
     --resume efficientvit_m4.pth \
     --target-reduction 0.76 \
     --ffn-prune-per-epoch 0.25 \
-    --qk-prune-per-epoch 0.05 \
+    --qk-prune-per-epoch 0.15 \
     --min-ffn-ratio 0.05 \
     --min-qk-ratio 0.25 \
     --pruning-epochs 15 \
@@ -459,7 +459,7 @@ python -m classification.pruning.train_combined_pruning \
     --resume efficientvit_m4.pth \
     --target-reduction 0.76 \
     --ffn-prune-per-epoch 0.25 \
-    --qk-prune-per-epoch 0.05 \
+    --qk-prune-per-epoch 0.15 \
     --min-ffn-ratio 0.05 \
     --min-qk-ratio 0.25 \
     --lambda-ffn 0.001 \
@@ -498,7 +498,7 @@ A: `--finetune-epochs 1`로 설정하세요.
 |----------|-----|------|
 | `--target-reduction` | **0.76** | 목표 압축률 (76%) |
 | `--ffn-prune-per-epoch` | **0.25** | FFN: 매 epoch 25% 제거 |
-| `--qk-prune-per-epoch` | **0.05** | Q/K: 매 epoch 5% 제거 |
+| `--qk-prune-per-epoch` | **0.15** | Q/K: 매 epoch 15% 제거 |
 | `--min-ffn-ratio` | **0.05** | FFN 최소 5% 유지 (최대 95% pruning) |
 | `--min-qk-ratio` | **0.25** | Q/K 최소 25% 유지 |
 | `--pruning-epochs` | **15** | Pruning 진행 epoch 수 |

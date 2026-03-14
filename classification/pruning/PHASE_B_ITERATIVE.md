@@ -64,7 +64,7 @@ python -m classification.pruning.train_combined_pruning \
 |----------|-----|------|
 | `--target-reduction` | **0.76** | 목표 압축률 (76%) |
 | `--ffn-prune-per-epoch` | **0.25** | FFN: 매 epoch **25%** 제거 (매우 공격적) |
-| `--qk-prune-per-epoch` | **0.05** | Q/K: 매 epoch **5%** 제거 |
+| `--qk-prune-per-epoch` | **0.15** | Q/K: 매 epoch **15%** 제거 (공격적) |
 | `--min-ffn-ratio` | **0.05** | FFN 최소 **5%** 유지 (최대 95% pruning) |
 | `--min-qk-ratio` | **0.25** | Q/K 최소 **25%** 유지 (attention 보존) |
 | `--pruning-epochs` | **15** | Pruning 진행 epoch 수 |
@@ -80,23 +80,27 @@ FFN이 전체 파라미터의 대부분을 차지:
 
 따라서:
   - FFN을 매우 공격적으로 pruning (25%/epoch)
-  - Q/K는 조심스럽게 pruning (5%/epoch, key_dim=16으로 이미 작음)
+  - Q/K도 공격적으로 pruning (15%/epoch)
+
+주의: 누적 추적은 승산(multiplicative)!
+  remaining *= (1 - rate)  (가산 아님!)
 ```
 
-### Pruning 진행 예측 (15 epochs)
+### Pruning 진행 예측 (승산 추적, 15 epochs)
 
 ```
 Epoch  | FFN 잔여율 | QK 잔여율 | 예상 압축률
 -------|-----------|----------|------------
   0    |   100%    |   100%   |     0%
-  1    |    75%    |    95%   |    ~8%
-  2    |    56%    |    90%   |   ~16%
-  5    |    24%    |    77%   |   ~45%
- 10    |     5%*   |    60%   |   ~65%
- 15    |     5%*   |    40%** |   ~76%
+  1    |    75%    |    85%   |   ~12%
+  3    |    42%    |    61%   |   ~35%
+  5    |    24%    |    44%   |   ~55%
+  8    |    10%    |    27%   |   ~70%
+ 10    |   5.6%    |   25%*  |   ~76%
+ 11    |    5%**   |   25%*  |   ~76% → TARGET
 
-* min_ffn_ratio = 5%에서 정지
-** min_qk_ratio = 25%에서 정지
+** min_ffn_ratio = 5%에서 정지
+* min_qk_ratio = 25%에서 정지
 ```
 
 ### Combined 전용: λ 설정
@@ -251,14 +255,14 @@ python -m classification.pruning.train_physical_pruning \
     --resume efficientvit_m4.pth \
     --target-reduction 0.76 \
     --ffn-prune-per-epoch 0.25 \
-    --qk-prune-per-epoch 0.05 \
+    --qk-prune-per-epoch 0.15 \
     --min-ffn-ratio 0.05 \
     --min-qk-ratio 0.25 \
     --pruning-epochs 15 \
-    --finetune-epochs 1 \
+    --finetune-epochs 5 \
     --batch-size 256 \
     --lr 1e-4 \
-    --output-dir checkpoints/physical_only_76pct
+    --output-dir checkpoints/physical_target76
 ```
 
 ### Combined 실행 (권장: 최종 결과)
@@ -267,20 +271,20 @@ python -m classification.pruning.train_combined_pruning \
     --model EfficientViT_M4 \
     --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
     --resume efficientvit_m4.pth \
-    --target-reduction 0.76 \
+    --target-reduction 0.8 \
     --ffn-prune-per-epoch 0.25 \
-    --qk-prune-per-epoch 0.05 \
+    --qk-prune-per-epoch 0.15 \
     --min-ffn-ratio 0.05 \
     --min-qk-ratio 0.25 \
     --lambda-ffn 0.001 \
     --lambda-qk 0.0002 \
     --lambda-v 0.0001 \
     --mu 1.0 \
-    --pruning-epochs 15 \
-    --finetune-epochs 1 \
+    --pruning-epochs 20 \
+    --finetune-epochs 10 \
     --batch-size 256 \
     --lr 1e-4 \
-    --output-dir checkpoints/combined_76pct
+    --output-dir checkpoints/combined_target80
 ```
 
 ### 체크포인트 참고

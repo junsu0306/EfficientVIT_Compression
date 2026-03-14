@@ -773,7 +773,7 @@ class IterativePhysicalPruner:
         self,
         target_reduction: float = 0.76,
         ffn_prune_per_epoch: float = 0.25,   # FFN: 매우 공격적 (epoch당 25% 제거)
-        qk_prune_per_epoch: float = 0.05,    # QK: epoch당 5% 제거
+        qk_prune_per_epoch: float = 0.15,    # QK: epoch당 15% 제거 (공격적)
         min_ffn_ratio: float = 0.05,         # 최소 FFN 5% 유지 (최대 95% pruning)
         min_qk_ratio: float = 0.25,          # 최소 QK 25% 유지
         warmup_epochs: int = 0,              # pruning 시작 전 warmup
@@ -792,9 +792,10 @@ class IterativePhysicalPruner:
         self.current_size_mb = None
         self.target_reached = False
 
-        # 누적 pruning 비율 추적
-        self.cumulative_ffn_pruned = 0.0
-        self.cumulative_qk_pruned = 0.0
+        # 승산(multiplicative) 누적 추적 — 실제 남은 비율
+        # 매 epoch: remaining *= (1 - prune_rate)
+        self.ffn_remaining = 1.0  # 100%에서 시작
+        self.qk_remaining = 1.0
 
         self.history = []
 
@@ -832,18 +833,37 @@ class IterativePhysicalPruner:
                 print(f"[Epoch {self.epoch}] Target reached: {current_reduction*100:.1f}% >= {self.target_reduction*100:.1f}%")
             return {'status': 'target_reached', 'reduction': current_reduction}
 
-        # 남은 pruning 여유 계산
-        remaining_ffn = 1.0 - self.cumulative_ffn_pruned - self.min_ffn_ratio
-        remaining_qk = 1.0 - self.cumulative_qk_pruned - self.min_qk_ratio
+        # FFN: min_ffn_ratio 이상이면 pruning 계속
+        # 승산 추적: ffn_remaining은 원본 대비 실제 남은 비율
+        if self.ffn_remaining > self.min_ffn_ratio:
+            ffn_rate = self.ffn_prune_per_epoch
+            # 이번 pruning 후 min 이하로 내려가지 않도록 조정
+            projected = self.ffn_remaining * (1.0 - ffn_rate)
+            if projected < self.min_ffn_ratio:
+                # min에 딱 맞게 rate 조정
+                ffn_rate = 1.0 - self.min_ffn_ratio / self.ffn_remaining
+                ffn_rate = max(0, ffn_rate)
+        else:
+            ffn_rate = 0
 
-        # 이번 epoch pruning rate (최대/최소 제한)
-        ffn_rate = min(self.ffn_prune_per_epoch, max(0, remaining_ffn))
-        qk_rate = min(self.qk_prune_per_epoch, max(0, remaining_qk))
+        # QK: min_qk_ratio 이상이면 pruning 계속
+        if self.qk_remaining > self.min_qk_ratio:
+            qk_rate = self.qk_prune_per_epoch
+            projected = self.qk_remaining * (1.0 - qk_rate)
+            if projected < self.min_qk_ratio:
+                qk_rate = 1.0 - self.min_qk_ratio / self.qk_remaining
+                qk_rate = max(0, qk_rate)
+        else:
+            qk_rate = 0
 
         if ffn_rate <= 0 and qk_rate <= 0:
             if self.verbose:
-                print(f"[Epoch {self.epoch}] Min ratio reached - no more pruning possible")
+                print(f"[Epoch {self.epoch}] Min ratio reached (FFN: {self.ffn_remaining:.3f}, QK: {self.qk_remaining:.3f})")
             return {'status': 'min_reached'}
+
+        if self.verbose:
+            print(f"[Epoch {self.epoch}] FFN remaining: {self.ffn_remaining:.3f} (rate={ffn_rate:.3f}), "
+                  f"QK remaining: {self.qk_remaining:.3f} (rate={qk_rate:.3f})")
 
         # Physical pruning 적용
         result = apply_iterative_physical_pruning(
@@ -853,9 +873,9 @@ class IterativePhysicalPruner:
             verbose=self.verbose
         )
 
-        # 누적 업데이트
-        self.cumulative_ffn_pruned += ffn_rate
-        self.cumulative_qk_pruned += qk_rate
+        # 승산 누적 업데이트
+        self.ffn_remaining *= (1.0 - ffn_rate)
+        self.qk_remaining *= (1.0 - qk_rate)
 
         # Forward pass 검증
         valid = validate_model_forward(model, device)
