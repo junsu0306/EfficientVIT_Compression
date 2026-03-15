@@ -1184,5 +1184,240 @@ classification/pruning/
 
 ---
 
+## 부록 C: 파라미터 비교 실험 — 64.6% vs 76% vs 80% 목표
+
+> **배경**: min ratio가 pruning floor를 결정함을 발견. `target-reduction` 파라미터는 조기 종료(early stop)만 하며, 실제 압축률의 하한은 `min_ffn_ratio`와 `min_qk_ratio`가 결정함.
+
+### C.1 원인 분석 — 왜 15 epoch(76%)와 20 epoch(80%)가 동일한 크기로 나오는가
+
+```
+pruning이 멈추는 조건 (두 가지):
+  1. current_reduction >= target_reduction  → 조기 종료 (early stop)
+  2. ffn_remaining <= min_ffn_ratio AND
+     qk_remaining <= min_qk_ratio          → 하한선 도달, 이후 pruning 없음
+
+목표(target_reduction)보다 하한선이 먼저 걸리면 목표와 무관하게 멈춤!
+
+현재 설정 (min_ffn_ratio=0.05, min_qk_ratio=0.25):
+  Epoch 9  : QK → 0.25 (min_qk_ratio 도달)
+  Epoch 11 : FFN → 0.05 (min_ffn_ratio 도달)
+  Epoch 12+ : pruning 완전 중단
+  결과 : 64.6% (15 epoch = 20 epoch = 동일)
+```
+
+### C.2 QK 하드코딩 제약 (중요!)
+
+`structural_pruning.py`의 `prune_efficientvit_block_cga()` 내부:
+```python
+min_dim = 4  # 하드코딩
+new_key_dim = max(min_dim, int(key_dim * qk_keep_ratio))
+```
+
+M4 기준 key_dim=16 → **QK 절대 하한 = 4/16 = 25%**
+→ `min_qk_ratio`를 0.25 이하로 설정해도 QK는 더 이상 pruning 안 됨
+→ **추가 압축은 FFN을 더 줄이는 수밖에 없음**
+
+### C.3 파라미터 세트 비교
+
+| 항목 | 기존 (Exp A) | 76% 시도 (Exp B) | 80% 시도 (Exp C) |
+|------|-------------|-----------------|-----------------|
+| `--target-reduction` | 0.76 | 0.76 | 0.80 |
+| `--min-ffn-ratio` | **0.05** | **0.02** | **0.01** |
+| `--min-qk-ratio` | 0.25 | 0.10* | 0.06* |
+| `--pruning-epochs` | 15 | 20 | 25 |
+| `--ffn-prune-per-epoch` | 0.25 | 0.25 | 0.25 |
+| `--qk-prune-per-epoch` | 0.15 | 0.15 | 0.15 |
+| `--lambda-ffn` | 1e-3 | 1e-3 | 2e-3 |
+| `--lambda-qk` | 2e-4 | 2e-4 | 2e-4 |
+| `--lambda-v` | 1e-4 | 1e-4 | 1e-4 |
+| `--finetune-epochs` | 10 | 10 | 10 |
+| FFN 이론 최소 | 5% | 2% | 1% |
+| QK 실제 최소 | 25% (하드코딩) | 25% (하드코딩) | 25% (하드코딩) |
+| **예상 압축률** | **~65%** | **~70-73%** | **~73-76%** |
+| 실측 결과 | 64.6%, 11.88MB | — | — |
+
+*min_qk_ratio를 낮춰도 QK는 min_dim=4 제약으로 25%가 실제 floor
+
+> **주의**: FFN을 1%까지 줄이면 accuracy 급락 위험. Phase C (KD) 없이는 회복 어려울 수 있음.
+> 80% 달성을 위해서는 `structural_pruning.py`의 `min_dim=4`를 `min_dim=2`로 낮추는 코드 수정도 고려 필요.
+
+### C.4 실행 명령어
+
+#### Exp A — 기존 (실측: 64.6%, 60.43%)
+```bash
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --ffn-prune-per-epoch 0.25 \
+    --qk-prune-per-epoch 0.15 \
+    --min-ffn-ratio 0.05 \
+    --min-qk-ratio 0.25 \
+    --lambda-ffn 0.001 \
+    --lambda-qk 0.0002 \
+    --lambda-v 0.0001 \
+    --mu 1.0 \
+    --pruning-epochs 15 \
+    --finetune-epochs 10 \
+    --batch-size 256 \
+    --lr 1e-4 \
+    --output-dir checkpoints/exp_a_64pct
+```
+
+#### Exp B — 76% 시도 (min_ffn_ratio 낮춤)
+```bash
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --ffn-prune-per-epoch 0.25 \
+    --qk-prune-per-epoch 0.15 \
+    --min-ffn-ratio 0.02 \
+    --min-qk-ratio 0.10 \
+    --lambda-ffn 0.001 \
+    --lambda-qk 0.0002 \
+    --lambda-v 0.0001 \
+    --mu 1.0 \
+    --pruning-epochs 20 \
+    --finetune-epochs 10 \
+    --batch-size 256 \
+    --lr 1e-4 \
+    --output-dir checkpoints/exp_b_76pct
+```
+
+#### Exp C — 80% 시도 (min_ffn_ratio 최저, lambda_ffn 강화)
+```bash
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.80 \
+    --ffn-prune-per-epoch 0.25 \
+    --qk-prune-per-epoch 0.15 \
+    --min-ffn-ratio 0.01 \
+    --min-qk-ratio 0.06 \
+    --lambda-ffn 0.002 \
+    --lambda-qk 0.0002 \
+    --lambda-v 0.0001 \
+    --mu 1.5 \
+    --pruning-epochs 20 \
+    --finetune-epochs 10 \
+    --batch-size 512 \
+    --lr 1e-4 \
+    --output-dir results/exp_c_80
+```
+
+### C.5 예상 압축률 계산 근거
+
+```
+M4 파라미터 분포 (추정):
+  FFN:      ~70% × 33.59MB ≈ 23.5 MB
+  QK/V/Proj: ~20% × 33.59MB ≈  6.7 MB
+  기타:      ~10% × 33.59MB ≈  3.4 MB
+
+QK는 min_dim=4 고정 → key_dim 16→4 → QK 75% pruning
+  남는 QK/V/Proj ≈ 6.7 × 0.40 ≈ 2.7 MB (V, Proj 포함하므로 rough)
+
+Exp A (min_ffn=0.05): FFN 95% pruning → FFN 잔여 ≈ 23.5 × 0.05 = 1.2 MB
+  Total ≈ 1.2 + 2.7 + 3.4 = 7.3 MB → 이론상 78%... 실측 64.6% (기타 포함 더 큼)
+
+Exp B (min_ffn=0.02): FFN 98% pruning → FFN 잔여 ≈ 23.5 × 0.02 = 0.5 MB
+  추가 절감 ≈ 1.2 - 0.5 = 0.7 MB → 실측 대비 +약 5-6%p 기대
+
+Exp C (min_ffn=0.01): FFN 99% pruning → FFN 잔여 ≈ 23.5 × 0.01 = 0.2 MB
+  추가 절감 ≈ 1.2 - 0.2 = 1.0 MB → 실측 대비 +약 8-9%p 기대
+```
+
+### C.6 결과 기록표 (실험 후 채워넣기)
+
+| 실험 | 압축률 | 최종 크기 | Pruning 후 Acc | Finetune 후 Acc | 비고 |
+|------|--------|-----------|----------------|-----------------|------|
+| Exp A | 64.6% | 11.88 MB | 59.51% | 60.43% | 기존 결과 |
+| Exp B | — | — | — | — | 실험 예정 |
+| Exp C | — | — | — | — | 실험 예정 |
+
+---
+
+## 부록 D: Pruned 모델 저장 및 로드
+
+### D.1 저장 방식 비교
+
+학습 완료 후 두 가지 형태로 저장됨:
+
+| 파일 | 저장 방식 | 로드 가능 여부 | 용도 |
+|------|----------|--------------|------|
+| `best_combined.pth` | `state_dict()` | ❌ 바로 불가 | 학습 재개 전용 |
+| `best_combined_model.pth` | `torch.save(model)` | ✅ 바로 가능 | 최고 Acc 시점 모델 |
+| `final_pruned_model.pth` | `torch.save(model)` | ✅ 바로 가능 | Finetune 완료 모델 |
+
+### D.2 왜 state_dict만으로는 로드가 안 되는가
+
+Physical Pruning은 레이어 크기를 물리적으로 교체함:
+```
+FFN Linear: (256, 128) → (13, 128)   ← 실제로 줄어든 레이어
+key_dim:     16         → 4           ← 실제로 줄어든 레이어
+```
+
+`state_dict()`는 이 줄어든 weights만 저장. 나중에 로드 시:
+```python
+model = EfficientViT_M4(...)     # 원본 shape (FFN=256, key_dim=16)으로 생성
+model.load_state_dict(ckpt)
+# ❌ RuntimeError: size mismatch for blocks1.0.ffn.pw1.weight:
+#    shape torch.Size([13, 128]) vs torch.Size([256, 128])
+```
+
+### D.3 torch.save(model) 로드 시 필요 조건
+
+`torch.save(model, ...)` 은 Python pickle로 직렬화됨.
+Pickle은 weights와 함께 **"이 객체가 어떤 클래스인지"** 도 기록.
+
+로드 시 내부 동작:
+```
+1. pth 파일 열기
+2. "이건 EfficientViT 클래스 객체야" 확인
+3. EfficientViT 클래스 정의를 현재 Python 환경에서 탐색  ← 여기서 실패 가능
+4. weights 채워넣기 → 객체 복원 완료
+```
+
+3번에서 클래스 정의를 못 찾으면:
+```
+ModuleNotFoundError: No module named 'classification'
+```
+
+### D.4 올바른 로드 방법
+
+```python
+import sys
+import torch
+
+# 프로젝트 루트를 Python 경로에 추가 (클래스 정의 탐색 가능하게)
+sys.path.insert(0, '/path/to/EfficientVIT_Compression')
+
+# 이제 바로 로드 가능
+model = torch.load('final_pruned_model.pth', map_location='cuda')
+model.eval()
+
+# 바로 inference
+with torch.no_grad():
+    output = model(input_tensor)  # pruned된 작은 모델로 실행
+```
+
+> **핵심**: `torch.load` 전에 프로젝트 코드가 있는 경로를 `sys.path`에 추가해야 함.
+> 같은 서버에서 같은 경로로 실행하면 `sys.path.insert` 없이도 동작할 수 있음.
+
+### D.5 다른 환경(서버/PC)으로 모델 이전 시
+
+```bash
+# 이전할 파일 목록
+scp results/exp_b_76pct/final_pruned_model.pth  user@new_server:/path/
+scp -r classification/  user@new_server:/path/EfficientVIT_Compression/  # 코드도 같이!
+```
+
+코드 없이 pth만 가져가면 로드 불가. **pth + 프로젝트 코드 세트**로 이전해야 함.
+
+---
+
 **Prepared by**: Claude Code
-**Last Updated**: 2026-03-14
+**Last Updated**: 2026-03-15
