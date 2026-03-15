@@ -27,7 +27,7 @@ Usage:
         --lambda-qk 0.0002 \
         --lambda-v 0.0001 \
         --mu 1.0 \
-        --output-dir ./checkpoints/combined
+        --output-dir ./results/combined
 """
 
 import argparse
@@ -110,7 +110,7 @@ def get_args_parser():
     parser.add_argument('--smoothing', default=0.1, type=float)
 
     # Output
-    parser.add_argument('--output-dir', default='./checkpoints/combined', type=str)
+    parser.add_argument('--output-dir', default='./results/combined', type=str)
     parser.add_argument('--device', default='cuda', type=str)
     parser.add_argument('--seed', default=42, type=int)
 
@@ -465,10 +465,13 @@ def main(args):
         if test_stats['acc1'] > best_acc1:
             best_acc1 = test_stats['acc1']
             is_best = True
+            # state_dict 체크포인트 (학습 재개용)
             torch.save({
                 'epoch': epoch, 'model': model.state_dict(),
                 'acc1': best_acc1, 'size_mb': current_size,
             }, os.path.join(args.output_dir, 'best_combined.pth'))
+            # 완전 모델 저장 (pruned 아키텍처 + weights, 바로 로드 가능)
+            torch.save(model, os.path.join(args.output_dir, 'best_combined_model.pth'))
             print(f"  >>> New best: {best_acc1:.2f}%")
 
         # Epoch별 핵심 로그 기록
@@ -544,6 +547,11 @@ def main(args):
     }
     with open(os.path.join(args.output_dir, 'summary_combined.json'), 'w') as f:
         json.dump(summary, f, indent=2)
+
+    # 최종 모델 저장 (pruned 아키텍처 + weights, 바로 로드 가능)
+    torch.save(model, os.path.join(args.output_dir, 'final_pruned_model.pth'))
+    print(f"  Final pruned model saved: {args.output_dir}/final_pruned_model.pth")
+    print(f"  Load with: model = torch.load('final_pruned_model.pth')")
 
     print(f"\nResults saved to: {args.output_dir}")
     print(f"Training log: {log_path}")
