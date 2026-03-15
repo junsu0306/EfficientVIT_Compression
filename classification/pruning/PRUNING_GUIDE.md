@@ -11,7 +11,7 @@
 
 1. [개요](#1-개요)
 2. [EfficientViT 아키텍처 분석](#2-efficientvit-아키텍처-분석)
-3. [Pruning 이론](#3-pruning-이론)
+3. [Pruning 이론](#3-pruning-이론) (Granularity, λ 비율, 제약 조건 포함)
 4. [구현 과정 및 문제 해결](#4-구현-과정-및-문제-해결)
 5. [최종 구현](#5-최종-구현)
 6. [실행 가이드](#6-실행-가이드)
@@ -169,22 +169,58 @@ importance[d] = ||Q.weight[d, :]||₂ + ||K.weight[d, :]||₂ + ||DW.weight[d, :
 ### 3.3 두 가지 Pruning 방식
 
 #### Physical-Only (CE Loss만 사용)
-```python
+```
 L_total = L_CE (CrossEntropy)
 
-# 매 epoch 끝에 importance 기반 physical pruning
-# 장점: 단순, 빠른 실험
-# 단점: pruning 시 갑작스러운 변화
+매 epoch 끝에 importance 기반 physical pruning
+장점: 단순, 빠른 실험
+단점: pruning 시 갑작스러운 변화 (weights가 미리 작아지지 않은 상태에서 제거)
 ```
 
-#### Combined (λ Regularization + Physical)
+#### Combined (λ Regularization + Physical) — PGM-inspired
+
+```
+L_total = L_CE + L_reg + L_mem
+
+where:
+  L_CE   = CrossEntropy(softmax(z), y)              ← 분류 손실
+  L_reg  = λ_FFN·Σ||w_FFN||² + λ_QK·Σ||w_QK||² + λ_V·Σ||w_V||²   ← 정규화
+  L_mem  = μ · max(0, current_size - M_max)          ← 메모리 제약
+```
+
+**PGM (Proximal Gradient Method)과의 관계:**
+
+| 항목 | 순수 PGM | Combined (본 구현) |
+|------|---------|-------------------|
+| Step 1: Gradient | `w -= η·∇L_total` | `w -= η·∇(L_CE + λ·‖w‖² + μ·mem)` |
+| Step 2: Proximal | Group Soft Thresholding (수학적) | Physical Pruning (importance 기반 제거) |
+| Sparsity 유도 | Group Lasso (L1/L2 norm) | L2 Regularization (‖w‖²) |
+| Zero 전환 | Soft thresholding이 자동으로 0 생성 | Epoch 끝에 명시적으로 작은 것 제거 |
+| 구조 축소 | 학습 후 별도 extraction 필요 | **매 epoch 물리적 축소 (extraction 불필요)** |
+
+순수 PGM의 proximal operator (Group Soft Thresholding):
 ```python
-L_total = L_CE + λ_FFN·Σ||w_FFN||² + λ_QK·Σ||w_QK||² + λ_V·Σ||w_V||² + μ·max(0, mem - m_max)
-
-# λ regularization이 weight를 미리 0 방향으로 유도
-# physical pruning 시 이미 작아진 weight 제거 → 안정적
-# memory penalty가 목표 압축률 강제
+# PGM 원본: threshold 이하면 그룹 전체를 0으로
+if ||w_g|| > η·λ_g:
+    w_g *= (1 - η·λ_g / ||w_g||)  # 수축
+else:
+    w_g = 0                        # 그룹 제거 → 별도 extraction으로 구조 축소
 ```
+
+본 구현의 대체 방식:
+```python
+# Combined: λ regularization이 weight를 미리 작게 유도
+#           → physical pruning이 importance 하위 unit 물리적 제거
+L_reg gradient: ∂L_reg/∂w = 2λw  → optimizer가 -2λw 방향으로 업데이트
+                                  → 불필요한 weights가 점차 0에 가까워짐
+
+# Epoch 끝: importance 기반 pruning
+importance[k] = ||expand.weight[k]||₂ + ||shrink.weight[:,k]||₂
+keep_indices = topk(importance, new_size)  # 이미 작아진 것들이 자연스럽게 제거됨
+new_conv.weight = old_conv.weight[keep_indices]  # 물리적 축소!
+```
+
+**결론**: Combined 방식은 **"PGM-inspired structured pruning"** — PGM의 핵심 아이디어(regularization으로 sparsity 유도 + operator로 구조 제거)를 차용하되, proximal operator를 importance 기반 physical pruning으로 대체한 실용적 변형입니다. 학습 후 별도 structure extraction이 필요 없다는 것이 순수 PGM 대비 장점입니다.
 
 ### 3.4 λ 비율 설계 (중요!)
 
@@ -196,7 +232,64 @@ L_total = L_CE + λ_FFN·Σ||w_FFN||² + λ_QK·Σ||w_QK||² + λ_V·Σ||w_V||²
 | Q/K | 2e-4 | 2x | key_dim=16으로 이미 작음, 조심 |
 | V | 1e-4 | 1x | 정보 손실 민감, 최소 pruning |
 
-### 3.5 Pruning 제약 조건
+### 3.5 Pruning Granularity: Layer-wise vs Global
+
+현재 구현은 **Layer-wise (Block별)** pruning을 사용합니다.
+
+#### 현재 구현 방식
+
+| 대상 | Granularity | Importance 범위 | 설명 |
+|------|------------|----------------|------|
+| FFN | **Block별 독립** | 해당 FFN의 expand+shrink | 각 block의 FFN을 개별적으로 importance 계산 후 pruning |
+| QK | **Block 내 Global** | 해당 CGA의 전체 head 합산 | 한 block 내 모든 head의 importance를 합산하여 통일된 indices 결정 |
+| V | 미적용 (keep=1.0) | — | — |
+
+#### FFN — Block별 독립 Pruning
+
+```
+Block A (Stage 2, C=256):  hidden=512 → importance 계산 → top-k 선택 → 384개 유지
+Block B (Stage 3, C=384):  hidden=768 → importance 계산 → top-k 선택 → 576개 유지
+
+→ 모든 block에 동일한 keep_ratio(75%) 적용
+→ 각 block에서 제거되는 neuron은 해당 block의 importance에 따라 독립 결정
+```
+
+#### QK — Block 내 Global Importance
+
+```python
+# 한 Block의 CGA 내 모든 head importance를 합산
+global_importance = torch.zeros(key_dim)
+for h in range(num_heads):
+    head_importance = compute_qk_importance(qkvs[h], dws[h], key_dim)
+    global_importance += head_importance
+
+# 합산된 importance로 통일된 keep_indices 결정
+_, keep_indices = torch.topk(global_importance, new_key_dim)
+
+# 모든 head에 동일 indices 적용 (key_dim 공유 제약)
+```
+
+**QK가 Block 내 Global인 이유**: CGA의 모든 head가 동일한 `key_dim`을 공유하므로, head별로 다른 indices를 pruning하면 `split_with_sizes` 오류 발생 (§4.4 참조).
+
+#### Layer-wise vs Global 비교
+
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| **Layer-wise (현재)** | 구현 단순, 모든 block이 균등하게 축소 | Stage간 중요도 차이 반영 못함 |
+| **Global** | redundant layer를 더 공격적으로 축소 가능, 같은 압축률에서 정확도 유리 | 구현 복잡, 일부 layer가 극단적으로 축소될 위험 |
+
+#### EfficientViT에서 Global FFN이 어려운 이유
+
+EfficientViT는 이미 최적화된 아키텍처입니다:
+- FFN expansion ratio가 **r=2** (일반 ViT의 r=4보다 이미 절반)
+- 각 Stage별 channel 수(128, 256, 384)가 ablation을 통해 결정된 값
+- Block 수(1, 2, 3)도 최적으로 설정됨
+
+따라서 Global pruning으로 특정 layer를 과도하게 축소하면, 이미 최적화된 아키텍처 밸런스가 무너질 가능성이 높습니다.
+
+> **향후 비교 과제**: Layer-wise vs Global FFN pruning의 정확도/압축률 비교 실험을 진행하여, EfficientViT 같은 최적화된 아키텍처에서 어떤 방식이 더 적합한지 검증 예정.
+
+### 3.6 Pruning 제약 조건
 
 **FFN 제약**:
 ```
@@ -321,6 +414,44 @@ ffn_prune_per_epoch = 0.25  # 25% (2.5배 증가)
 qk_prune_per_epoch = 0.05   # 5% (2.5배 증가)
 min_ffn_ratio = 0.05        # 최소 5% (2배 감소)
 min_qk_ratio = 0.25         # 최소 25% (2배 감소)
+```
+
+### 4.6 버그 수정: Additive → Multiplicative 누적 추적 (Critical)
+
+**문제**: ImageNet 학습 시 46.2%만 달성 (76% 목표), FFN이 거의 pruning 안 됨
+```
+로그: FFN keep=1.00  ← pruning이 전혀 일어나지 않음!
+```
+
+**원인**: Additive 누적 추적 — 4 epoch 만에 `cumulative = 1.0` 도달하여 조기 중단
+```python
+# 버그 코드 (additive)
+self.cumulative_ffn_pruned = 0.0
+self.cumulative_ffn_pruned += 0.25  # epoch 1: 0.25
+self.cumulative_ffn_pruned += 0.25  # epoch 2: 0.50
+self.cumulative_ffn_pruned += 0.25  # epoch 3: 0.75
+self.cumulative_ffn_pruned += 0.25  # epoch 4: 1.00 → 중단!
+# 실제로는 0.75^4 = 31.6%만 pruned인데 100%로 인식
+```
+
+**해결**: Multiplicative 누적 추적 — 실제 남은 비율을 정확히 추적
+```python
+# 수정 코드 (multiplicative)
+self.ffn_remaining = 1.0        # 100%에서 시작
+self.ffn_remaining *= (1 - 0.25)  # epoch 1: 0.750
+self.ffn_remaining *= (1 - 0.25)  # epoch 2: 0.563
+self.ffn_remaining *= (1 - 0.25)  # epoch 3: 0.422
+self.ffn_remaining *= (1 - 0.25)  # epoch 4: 0.316
+# ...                              # epoch 10: 0.056
+# min_ffn_ratio(0.05)에 도달할 때까지 계속 진행!
+```
+
+**추가 보호**: min ratio에 정확히 맞추기
+```python
+projected = self.ffn_remaining * (1.0 - ffn_rate)
+if projected < self.min_ffn_ratio:
+    ffn_rate = 1.0 - self.min_ffn_ratio / self.ffn_remaining
+    ffn_rate = max(0, ffn_rate)
 ```
 
 ---
@@ -448,7 +579,7 @@ python -m classification.pruning.train_physical_pruning \
     --finetune-epochs 1 \
     --batch-size 256 \
     --lr 1e-4 \
-    --output-dir checkpoints/physical_only_76pct
+    --output-dir classification/pruning/results/physical_76pct
 ```
 
 #### Combined (최종 결과용, 권장)
@@ -470,10 +601,126 @@ python -m classification.pruning.train_combined_pruning \
     --finetune-epochs 1 \
     --batch-size 256 \
     --lr 1e-4 \
-    --output-dir checkpoints/combined_76pct
+    --output-dir classification/pruning/results/combined_76pct
 ```
 
-### 6.4 체크포인트 관련 FAQ
+### 6.4 압축률별 실행 명령어
+
+#### 15% 압축 (33.59 MB → ~28.55 MB)
+
+```bash
+# Physical-Only 15%
+python -m classification.pruning.train_physical_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.15 \
+    --ffn-prune-per-epoch 0.08 \
+    --qk-prune-per-epoch 0.05 \
+    --min-ffn-ratio 0.70 \
+    --min-qk-ratio 0.70 \
+    --pruning-epochs 5 \
+    --finetune-epochs 10 \
+    --output-dir /results/physical_15pct
+
+# Combined 15%
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.15 \
+    --ffn-prune-per-epoch 0.08 \
+    --qk-prune-per-epoch 0.05 \
+    --min-ffn-ratio 0.70 \
+    --min-qk-ratio 0.70 \
+    --lambda-ffn 5e-5 --lambda-qk 2e-5 --lambda-v 5e-6 \
+    --pruning-epochs 5 \
+    --finetune-epochs 10 \
+    --output-dir /results/combined_15pct
+```
+
+#### 30% 압축 (33.59 MB → ~23.51 MB)
+
+```bash
+# Physical-Only 30%
+python -m classification.pruning.train_physical_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.30 \
+    --ffn-prune-per-epoch 0.12 \
+    --qk-prune-per-epoch 0.08 \
+    --min-ffn-ratio 0.50 \
+    --min-qk-ratio 0.50 \
+    --pruning-epochs 8 \
+    --finetune-epochs 10 \
+    --output-dir classification/pruning/results/physical_30pct
+
+# Combined 30%
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.30 \
+    --ffn-prune-per-epoch 0.12 \
+    --qk-prune-per-epoch 0.08 \
+    --min-ffn-ratio 0.50 \
+    --min-qk-ratio 0.50 \
+    --lambda-ffn 8e-5 --lambda-qk 3e-5 --lambda-v 8e-6 \
+    --pruning-epochs 8 \
+    --finetune-epochs 10 \
+    --output-dir results/combined_30pct
+```
+
+#### 76% 압축 (33.59 MB → ~8.06 MB) — 기존
+
+```bash
+# Physical-Only 76%
+python -m classification.pruning.train_physical_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --ffn-prune-per-epoch 0.25 \
+    --qk-prune-per-epoch 0.15 \
+    --min-ffn-ratio 0.05 \
+    --min-qk-ratio 0.25 \
+    --pruning-epochs 15 \
+    --finetune-epochs 10 \
+    --output-dir classification/pruning/results/physical_76pct
+
+# Combined 76%
+python -m classification.pruning.train_combined_pruning \
+    --model EfficientViT_M4 \
+    --data-path /workspace/etri_iitp/JS/EfficientViT/data/imagenet \
+    --resume efficientvit_m4.pth \
+    --target-reduction 0.76 \
+    --ffn-prune-per-epoch 0.25 \
+    --qk-prune-per-epoch 0.15 \
+    --min-ffn-ratio 0.05 \
+    --min-qk-ratio 0.25 \
+    --lambda-ffn 0.001 --lambda-qk 0.0002 --lambda-v 0.0001 \
+    --mu 1.0 \
+    --pruning-epochs 15 \
+    --finetune-epochs 10 \
+    --output-dir classification/pruning/results/combined_76pct
+```
+
+#### 압축률별 파라미터 비교표
+
+| 파라미터 | 15% | 30% | 76% |
+|----------|-----|-----|-----|
+| ffn-prune-per-epoch | 0.08 | 0.12 | 0.25 |
+| qk-prune-per-epoch | 0.05 | 0.08 | 0.15 |
+| min-ffn-ratio | 0.70 | 0.50 | 0.05 |
+| min-qk-ratio | 0.70 | 0.50 | 0.25 |
+| pruning-epochs | 5 | 8 | 15 |
+| finetune-epochs | 10 | 10 | 10 |
+| λ_FFN (Combined) | 5e-5 | 8e-5 | 1e-3 |
+| λ_QK (Combined) | 2e-5 | 3e-5 | 2e-4 |
+| λ_V (Combined) | 5e-6 | 8e-6 | 1e-4 |
+
+### 6.5 체크포인트 관련 FAQ
 
 **Q: 다시 실행할 때 체크포인트를 지워야 하나요?**
 
@@ -561,85 +808,351 @@ A: `--finetune-epochs 1`로 설정하세요.
 
 ---
 
-## 부록 A: 주요 코드 스니펫
+## 부록 A: 핵심 구현 코드
 
-### A.1 FFN Physical Pruning
+> 파일: `structural_pruning.py`, `train_physical_pruning.py`, `train_combined_pruning.py`
+
+### A.1 FFN Importance 계산
 
 ```python
-def prune_ffn_physically(ffn, keep_ratio, min_neurons=8):
-    expand = ffn[0]  # Conv-BN-ReLU
-    shrink = ffn[1]  # Conv-BN
+# structural_pruning.py: compute_ffn_importance()
+def compute_ffn_importance(expand_conv, shrink_conv):
+    """
+    FFN hidden neuron의 importance = expand 출력 채널 L2 norm + shrink 입력 채널 L2 norm
 
-    # Importance 계산
-    expand_norms = expand.c.weight.norm(dim=(1, 2, 3))
-    shrink_norms = shrink.c.weight.norm(dim=(0, 2, 3))
-    importance = expand_norms + shrink_norms
+    expand.weight: [hidden_dim, embed_dim, 1, 1]  → 출력 채널별 norm
+    shrink.weight: [embed_dim, hidden_dim, 1, 1]  → 입력 채널별 norm
+    """
+    with torch.no_grad():
+        w_expand = expand_conv.c.weight  # Conv2d_BN 내부의 Conv2d
+        expand_norms = w_expand.view(w_expand.size(0), -1).norm(dim=1)  # [hidden_dim]
 
-    # Top-k 선택
-    new_hidden = max(min_neurons, int(current_hidden * keep_ratio))
-    _, keep_indices = torch.topk(importance, new_hidden, largest=True)
-    keep_indices = keep_indices.sort().values
+        w_shrink = shrink_conv.c.weight
+        shrink_norms = w_shrink.view(w_shrink.size(0), -1, 1, 1).squeeze().norm(dim=0)  # [hidden_dim]
 
-    # expand 축소 (out_channels)
-    new_expand_conv = nn.Conv2d(embed_dim, new_hidden, kernel_size=1, bias=False)
-    new_expand_conv.weight.data = expand.c.weight.data[keep_indices]
-    expand.c = new_expand_conv
-
-    # BN 축소
-    new_expand_bn = nn.BatchNorm2d(new_hidden)
-    new_expand_bn.weight.data = expand.bn.weight.data[keep_indices]
-    new_expand_bn.bias.data = expand.bn.bias.data[keep_indices]
-    # ... running_mean, running_var도 동일
-    expand.bn = new_expand_bn
-
-    # shrink 축소 (in_channels)
-    new_shrink_conv = nn.Conv2d(new_hidden, embed_dim, kernel_size=1, bias=False)
-    new_shrink_conv.weight.data = shrink.c.weight.data[:, keep_indices]
-    shrink.c = new_shrink_conv
+        importance = expand_norms + shrink_norms  # [hidden_dim]
+    return importance
 ```
 
-### A.2 CGA Global Importance Pruning
+### A.2 FFN Physical Pruning
 
 ```python
-def prune_efficientvit_block_cga(cga, keep_ratio):
+# structural_pruning.py: prune_ffn_physically()
+def prune_ffn_physically(ffn, keep_ratio, min_neurons=8):
+    expand = ffn.pw1  # Conv2d_BN (expand)
+    shrink = ffn.pw2  # Conv2d_BN (shrink)
+
+    hidden_dim = expand.c.out_channels
+    embed_dim = expand.c.in_channels
+
+    # 유지할 neuron 수 계산
+    new_hidden = max(min_neurons, int(hidden_dim * keep_ratio))
+    new_hidden = min(new_hidden, hidden_dim)
+
+    # Importance 기반 top-k 선택
+    importance = compute_ffn_importance(expand, shrink)
+    _, keep_indices = torch.topk(importance, new_hidden, largest=True)
+    keep_indices = keep_indices.sort().values  # 순서 유지
+
+    with torch.no_grad():
+        # === Expand (pw1) 축소: out_channels 감소 ===
+        new_expand_conv = nn.Conv2d(embed_dim, new_hidden, kernel_size=1, bias=False)
+        new_expand_conv.weight.data = expand.c.weight.data[keep_indices]
+        expand.c = new_expand_conv
+
+        # BN도 동일 indices로 축소 (weight, bias, running_mean, running_var)
+        new_expand_bn = nn.BatchNorm2d(new_hidden)
+        new_expand_bn.weight.data = expand.bn.weight.data[keep_indices]
+        new_expand_bn.bias.data = expand.bn.bias.data[keep_indices]
+        new_expand_bn.running_mean.data = expand.bn.running_mean.data[keep_indices]
+        new_expand_bn.running_var.data = expand.bn.running_var.data[keep_indices]
+        expand.bn = new_expand_bn
+
+        # === Shrink (pw2) 축소: in_channels 감소 ===
+        new_shrink_conv = nn.Conv2d(new_hidden, embed_dim, kernel_size=1, bias=False)
+        new_shrink_conv.weight.data = shrink.c.weight.data[:, keep_indices]
+        shrink.c = new_shrink_conv
+        # shrink의 BN은 출력(embed_dim) 기준이므로 변경 없음
+
+    return hidden_dim, new_hidden
+```
+
+### A.3 QK Importance 계산 및 CGA Global Pruning
+
+```python
+# structural_pruning.py: compute_qk_importance()
+def compute_qk_importance(qkv_conv, dw_conv, key_dim):
+    """
+    Q/K dim의 importance = Q norm + K norm + DW norm
+
+    qkv.weight: [key_dim*2 + d, in_ch, 1, 1]
+      Q: [0 : key_dim]
+      K: [key_dim : 2*key_dim]
+      V: [2*key_dim : ]  ← pruning 대상 아님
+    """
+    with torch.no_grad():
+        w_qkv = qkv_conv.c.weight
+        w_dw = dw_conv.c.weight  # [key_dim, 1, kH, kW]
+
+        q_norms = w_qkv[:key_dim].view(key_dim, -1).norm(dim=1)
+        k_norms = w_qkv[key_dim:2*key_dim].view(key_dim, -1).norm(dim=1)
+        dw_norms = w_dw.view(key_dim, -1).norm(dim=1)
+
+        importance = q_norms + k_norms + dw_norms
+    return importance
+
+
+# structural_pruning.py: prune_efficientvit_block_cga()
+def prune_efficientvit_block_cga(block, qk_keep_ratio, v_keep_ratio=1.0):
+    """
+    CRITICAL: CGA의 모든 head가 동일한 key_dim을 공유
+    → 모든 head의 importance를 합산하여 Global Importance 계산
+    → 통일된 keep_indices를 모든 head에 적용
+    """
+    cga = block.mixer.m.attn  # Residual → LocalWindowAttention → CascadedGroupAttention
     key_dim = cga.key_dim
     num_heads = cga.num_heads
 
-    # Global Importance 계산 (모든 head 합산)
-    global_importance = torch.zeros(key_dim)
+    new_key_dim = max(4, int(key_dim * qk_keep_ratio))
+
+    # === Step 1: Global Importance 계산 (모든 head 합산) ===
+    global_importance = torch.zeros(key_dim, device=cga.qkvs[0].c.weight.device)
     for h in range(num_heads):
-        qkv = cga.qkvs[h]
-        dw = cga.dws[h]
+        head_importance = compute_qk_importance(cga.qkvs[h], cga.dws[h], key_dim)
+        global_importance += head_importance
 
-        # Q, K, DW norms
-        q_norms = qkv.c.weight[:key_dim].norm(dim=(1, 2, 3))
-        k_norms = qkv.c.weight[key_dim:2*key_dim].norm(dim=(1, 2, 3))
-        dw_norms = dw.c.weight.norm(dim=(1, 2, 3))
-
-        global_importance += q_norms + k_norms + dw_norms
-
-    # 통일된 keep_indices
-    new_key_dim = max(4, int(key_dim * keep_ratio))
-    _, keep_indices = torch.topk(global_importance, new_key_dim)
+    # === Step 2: 통일된 keep_indices 결정 ===
+    _, keep_indices = torch.topk(global_importance, new_key_dim, largest=True)
     keep_indices = keep_indices.sort().values
 
-    # 모든 head에 동일 indices 적용
-    for h in range(num_heads):
-        # QKV Conv 수정
-        q_weights = qkv.c.weight[:key_dim][keep_indices]
-        k_weights = qkv.c.weight[key_dim:2*key_dim][keep_indices]
-        v_weights = qkv.c.weight[2*key_dim:]  # V는 유지
-        new_qkv_weight = torch.cat([q_weights, k_weights, v_weights])
-        # ... 새 Conv 생성 및 교체
+    # === Step 3: 모든 head에 동일 indices 적용 ===
+    with torch.no_grad():
+        for h in range(num_heads):
+            qkv = cga.qkvs[h]
+            dw = cga.dws[h]
+            d = cga.d
+            in_ch = qkv.c.in_channels
 
-        # DW Conv 수정 (groups 조정!)
-        new_dw = nn.Conv2d(new_key_dim, new_key_dim,
-                          kernel_size=kernel_size, groups=new_key_dim)
-        new_dw.weight.data = dw.c.weight[keep_indices]
+            # QKV Conv: Q/K는 pruning, V는 유지
+            w_qkv = qkv.c.weight  # [key_dim*2+d, in_ch, 1, 1]
+            new_q = w_qkv[:key_dim][keep_indices]
+            new_k = w_qkv[key_dim:2*key_dim][keep_indices]
+            v_weights = w_qkv[2*key_dim:]  # V는 그대로
 
-    # CGA 속성 업데이트 (한 번만!)
+            new_qkv_weight = torch.cat([new_q, new_k, v_weights], dim=0)
+
+            new_out_ch = new_key_dim * 2 + d
+            new_qkv_conv = nn.Conv2d(in_ch, new_out_ch, kernel_size=1, bias=False)
+            new_qkv_conv.weight.data = new_qkv_weight
+            qkv.c = new_qkv_conv
+
+            # BN: Q/K 구간은 keep_indices, V 구간은 전체 유지
+            bn_w = qkv.bn.weight.data
+            new_bn_w = torch.cat([bn_w[:key_dim][keep_indices],
+                                  bn_w[key_dim:2*key_dim][keep_indices],
+                                  bn_w[2*key_dim:]])
+            # bias, running_mean, running_var도 동일 패턴
+            # ... (생략, 동일 로직)
+            qkv.bn = new_qkv_bn
+
+            # DW Conv: groups = key_dim → new_key_dim
+            new_dw_conv = nn.Conv2d(
+                new_key_dim, new_key_dim,
+                kernel_size=dw.c.kernel_size, padding=dw.c.padding,
+                groups=new_key_dim, bias=False
+            )
+            new_dw_conv.weight.data = dw.c.weight[keep_indices]
+            dw.c = new_dw_conv
+            # DW BN도 keep_indices로 축소
+            # ...
+
+    # === Step 4: CGA 속성 업데이트 (한 번만!) ===
     cga.key_dim = new_key_dim
     cga.scale = new_key_dim ** -0.5
+```
+
+### A.4 IterativePhysicalPruner (Multiplicative 누적 추적)
+
+```python
+# structural_pruning.py: IterativePhysicalPruner
+class IterativePhysicalPruner:
+    def __init__(self, target_reduction=0.76, ffn_prune_per_epoch=0.25,
+                 qk_prune_per_epoch=0.15, min_ffn_ratio=0.05, min_qk_ratio=0.25):
+        self.target_reduction = target_reduction
+        self.ffn_prune_per_epoch = ffn_prune_per_epoch
+        self.qk_prune_per_epoch = qk_prune_per_epoch
+        self.min_ffn_ratio = min_ffn_ratio
+        self.min_qk_ratio = min_qk_ratio
+
+        # 승산(multiplicative) 누적 추적 — 실제 남은 비율
+        self.ffn_remaining = 1.0  # 100%에서 시작
+        self.qk_remaining = 1.0
+        self.target_reached = False
+
+    def step(self, model, device='cuda'):
+        # FFN: min_ffn_ratio 이상이면 pruning 계속
+        if self.ffn_remaining > self.min_ffn_ratio:
+            ffn_rate = self.ffn_prune_per_epoch
+            # min 이하로 내려가지 않도록 보호
+            projected = self.ffn_remaining * (1.0 - ffn_rate)
+            if projected < self.min_ffn_ratio:
+                ffn_rate = 1.0 - self.min_ffn_ratio / self.ffn_remaining
+                ffn_rate = max(0, ffn_rate)
+        else:
+            ffn_rate = 0
+
+        # QK: 동일 로직
+        if self.qk_remaining > self.min_qk_ratio:
+            qk_rate = self.qk_prune_per_epoch
+            projected = self.qk_remaining * (1.0 - qk_rate)
+            if projected < self.min_qk_ratio:
+                qk_rate = 1.0 - self.min_qk_ratio / self.qk_remaining
+                qk_rate = max(0, qk_rate)
+        else:
+            qk_rate = 0
+
+        # Physical pruning 적용
+        result = apply_iterative_physical_pruning(model, ffn_rate, qk_rate)
+
+        # 승산 누적 업데이트 (핵심!)
+        # remaining은 원본 대비 실제 남은 비율
+        self.ffn_remaining *= (1.0 - ffn_rate)  # 0.75 → 0.56 → 0.42 → ...
+        self.qk_remaining *= (1.0 - qk_rate)    # 0.85 → 0.72 → 0.61 → ...
+
+        # Forward pass 검증
+        validate_model_forward(model, device)
+
+        # 목표 도달 확인
+        if result['cumulative_reduction'] >= self.target_reduction:
+            self.target_reached = True
+
+        return result
+```
+
+**Multiplicative 추적이 핵심인 이유** (§4.6 버그 참조):
+```
+additive (버그):     0.25 + 0.25 + 0.25 + 0.25 = 1.0 → 4 epoch에서 중단!
+multiplicative (수정): 0.75 × 0.75 × 0.75 × ... → 계속 감소, min_ratio까지 진행
+```
+
+### A.5 Training Loop (Physical-Only)
+
+```python
+# train_physical_pruning.py: main() 핵심 부분
+for epoch in range(total_epochs):
+    phase = 'PRUNE' if epoch < args.pruning_epochs else 'FINETUNE'
+
+    # Step 1: Train one epoch (CE loss only)
+    train_stats = train_one_epoch_physical(
+        model, data_loader_train, optimizer, device, epoch,
+        criterion, scaler, args.clip_grad
+    )
+
+    # Step 2: Physical pruning (pruning phase에만)
+    if epoch < args.pruning_epochs and not pruner.target_reached:
+        pruning_result = pruner.step(model, device)
+
+        # CRITICAL: pruning 후 optimizer 재생성 (파라미터가 변경되었으므로)
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=optimizer.param_groups[0]['lr'],
+            weight_decay=args.weight_decay
+        )
+
+    # Step 3: Evaluate
+    test_stats = evaluate(data_loader_val, model, device)
+    lr_scheduler.step()
+
+    # Step 4: Pruning 완료 시점 기록
+    if epoch == args.pruning_epochs - 1 or pruner.target_reached:
+        pruning_end_acc1 = test_stats['acc1']
+        pruning_end_size = compute_model_size_mb(model)
+```
+
+### A.6 Combined Loss 계산 (λ Regularization + Memory Penalty)
+
+```python
+# train_combined_pruning.py: compute_lambda_regularization()
+def compute_lambda_regularization(model, lambda_ffn, lambda_qk, lambda_v):
+    """
+    L_reg = λ_FFN·Σ||w_FFN||² + λ_QK·Σ||w_QK||² + λ_V·Σ||w_V||²
+
+    gradient에 -2λw 항 추가 → weights를 0 방향으로 유도
+    physical pruning 시 이미 작아진 weights 제거 → 안정적
+    """
+    reg_loss = 0.0
+
+    for name, module in model.named_modules():
+        # FFN layers (pw1 = expand, pw2 = shrink)
+        if hasattr(module, 'pw1') and hasattr(module, 'pw2'):
+            reg_loss += lambda_ffn * torch.sum(module.pw1.c.weight ** 2)
+            reg_loss += lambda_ffn * torch.sum(module.pw2.c.weight ** 2)
+
+        # CGA layers (qkvs, dws) — Q/K/V를 slice로 분리
+        if hasattr(module, 'qkvs') and hasattr(module, 'dws'):
+            for h in range(len(module.qkvs)):
+                w = module.qkvs[h].c.weight
+                key_dim = module.key_dim
+                d = module.d
+
+                reg_loss += lambda_qk * torch.sum(w[:key_dim] ** 2)           # Q
+                reg_loss += lambda_qk * torch.sum(w[key_dim:2*key_dim] ** 2)  # K
+                reg_loss += lambda_v * torch.sum(w[2*key_dim:2*key_dim+d] ** 2)  # V
+
+                reg_loss += lambda_qk * torch.sum(module.dws[h].c.weight ** 2)  # DW
+
+    return reg_loss
+
+
+def compute_memory_penalty(current_size_mb, m_max_mb, mu):
+    """μ · max(0, current_mem - m_max)"""
+    return mu * max(0.0, current_size_mb - m_max_mb)
+
+
+# Training loop에서:
+def train_one_epoch_combined(model, data_loader, ..., lambda_ffn, lambda_qk, lambda_v, mu):
+    for samples, targets in data_loader:
+        outputs = model(samples)
+        ce_loss = criterion(outputs, targets)
+        reg_loss = compute_lambda_regularization(model, lambda_ffn, lambda_qk, lambda_v)
+        mem_penalty = compute_memory_penalty(current_size_mb, m_max_mb, mu)
+
+        # Total loss = CE + λ_reg + μ·memory_penalty
+        loss = ce_loss + reg_loss + mem_penalty
+
+        loss.backward()
+        optimizer.step()
+```
+
+### A.7 전체 모델 Pruning 순회 구조
+
+```python
+# structural_pruning.py: apply_iterative_physical_pruning()
+def apply_iterative_physical_pruning(model, ffn_prune_rate, qk_prune_rate):
+    """전체 모델의 모든 block을 순회하며 physical pruning 적용"""
+    ffn_keep = 1.0 - ffn_prune_rate
+    qk_keep = 1.0 - qk_prune_rate
+
+    # Stage 1 (blocks1): EfficientViTBlock
+    for block in model.blocks1:
+        if hasattr(block, 'ffn0'):  # EfficientViTBlock 판별
+            prune_efficientvit_block_ffn(block, ffn_keep)
+            prune_efficientvit_block_cga(block, qk_keep)
+
+    # Stage 2 (blocks2): Subsample + EfficientViTBlock
+    for block in model.blocks2:
+        if isinstance(block, nn.Sequential):
+            # Subsample FFN (SubPreDWFFN, SubPostDWFFN)
+            for sub in block:
+                if hasattr(sub, 'm') and hasattr(sub.m, 'pw1'):
+                    prune_ffn_physically(sub.m, ffn_keep)
+        elif hasattr(block, 'ffn0'):
+            prune_efficientvit_block_ffn(block, ffn_keep)
+            prune_efficientvit_block_cga(block, qk_keep)
+
+    # Stage 3 (blocks3): 동일 패턴
+    for block in model.blocks3:
+        # ... Stage 2와 동일
 ```
 
 ---
