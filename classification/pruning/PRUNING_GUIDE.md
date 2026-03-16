@@ -634,8 +634,8 @@ python -m classification.pruning.train_combined_pruning \
     --min-ffn-ratio 0.70 \
     --min-qk-ratio 0.70 \
     --lambda-ffn 5e-5 --lambda-qk 2e-5 --lambda-v 5e-6 \
-    --pruning-epochs 5 \
-    --finetune-epochs 10 \
+    --pruning-epochs 8 \
+    --finetune-epochs 5 \
     --output-dir /results/combined_15pct
 ```
 
